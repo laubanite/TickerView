@@ -118,6 +118,16 @@ const app = createApp({
         ma10v: n >= 10 ? avg(vol.slice(-10)) : null,
       };
     },
+    latestMorningEntry() {
+      // 最新一条盘前盯盘记录(含隔夜重要消息),按日期倒序取第一条
+      const entries = this.bm?.daily?.journal || [];
+      return entries
+        .filter((e) => (e.kind || "").includes("盘前") || (e.content || "").includes("盘前"))
+        .sort((a, b) => (b.date || "").localeCompare(a.date || ""))[0] || null;
+    },
+    playbookRows() {
+      return this.bm?.daily?.playbook || [];
+    },
   },
 
   methods: {
@@ -442,11 +452,11 @@ const app = createApp({
       };
     },
     levelMarkLine() {
-      // 速查卡价位自动叠线(买区/突破/减仓红线/生命线),越界自动隐藏由 ECharts 处理
+      // 速查卡价位自动叠线(买区/突破/减仓红线/生命线);标注放左端,避免遮住最新一根K线
       return {
         silent: true,
         symbol: "none",
-        label: { show: true, position: "insideEndTop", fontSize: 10, color: "#d1d4dc" },
+        label: { show: true, position: "insideStartTop", fontSize: 10, color: "#d1d4dc" },
         data: this.levelLines,
       };
     },

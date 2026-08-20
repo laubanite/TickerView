@@ -40,16 +40,17 @@ def create_app() -> Flask:
     # ------------------------------------------------------------ 指数
     @app.route("/api/indices")
     def api_indices():
-        # 上证/深成/创业板 用同花顺;科创综指 thscode 待确认(待定问题4)
+        # 上证/深成/创业板/科创综指 用同花顺(科创综指 thscode 000680.SH,2026-08-21 实测可取)
         try:
-            snaps = fuyao.fetch_index_snapshot(["000001.SH", "399001.SZ", "399006.SZ"])
+            snaps = fuyao.fetch_index_snapshot(["000001.SH", "399001.SZ", "399006.SZ", "000680.SH"])
             out = []
             for code, label in (("000001.SH", "上证指数"), ("399001.SZ", "深证成指"),
-                                ("399006.SZ", "创业板指")):
+                                ("399006.SZ", "创业板指"), ("000680.SH", "科创综指")):
                 s = snaps.get(code) or {}
                 out.append({
                     "name": label, "code": code,
-                    "price": s.get("last_price"), "change_pct": s.get("change_pct"),
+                    "price": s.get("last_price"),
+                    "change_pct": s.get("price_change_ratio_pct") or s.get("change_pct"),
                 })
             return jsonify({"ok": True, "indices": out})
         except Exception as exc:  # noqa: BLE001
