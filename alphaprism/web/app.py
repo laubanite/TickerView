@@ -206,6 +206,22 @@ def create_app() -> Flask:
             logger.warning("作战地图解析失败: %s", exc)
             return jsonify({"ok": False, "error": str(exc)}), 502
 
+    # ------------------------------------------------------------ 盘前视图(实时新闻+LLM,三块联动)
+    @app.route("/api/morning")
+    def api_morning():
+        path = _battlemap_path(cfg)
+        if not path:
+            return jsonify({"ok": False, "error": "未找到作战地图"}), 404
+        try:
+            from ..planner.playbook import build_morning_view
+
+            model = parse_battlemap(path)
+            view = build_morning_view(model, cfg)
+            return jsonify({"ok": True, **view})
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("盘前视图失败: %s", exc)
+            return jsonify({"ok": False, "error": str(exc)}), 502
+
     # ------------------------------------------------------------ 盘前生成(里程碑2)
     @app.route("/api/playbook", methods=["GET", "POST"])
     def api_playbook():

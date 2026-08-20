@@ -40,6 +40,14 @@ const app = createApp({
       pbLoading: false,
       pbSaving: false,
       pbSaved: "",
+      // 盘前视图(实时新闻 + LLM 提取,三块联动)
+      mgNews: null,          // {summary, items:[{time,text,impact,sector,reason}]}
+      mgPlaybook: [],        // [{code,name,overnight,action}]
+      mgPlan: [],            // [{code,name,current,plan}]
+      mgTime: "",
+      mgError: "",
+      mgLoading: false,
+      mgSaved: "",
       // 自选股管理(§5.6)
       newSym: "",
       wlMsg: "",
@@ -529,6 +537,51 @@ const app = createApp({
       }
     },
 
+    // ---- 盘前视图(实时新闻+LLM,三块联动) ----
+    async loadMorning() {
+      this.mgError = "";
+      this.mgLoading = true;
+      try {
+        const r = await api("/api/morning");
+        if (!r.ok) { this.mgError = r.error || "盘前视图生成失败"; return; }
+        this.mgNews = r.news || null;
+        this.mgPlaybook = r.playbook || [];
+        this.mgPlan = r.plan || [];
+        this.mgTime = new Date().toLocaleTimeString("zh-CN", { hour: "2-digit", minute: "2-digit" });
+      } finally {
+        this.mgLoading = false;
+      }
+    },
+    newsCls(impact) {
+      if (impact === "利空") return "nw bad";
+      if (impact === "利好") return "nw good";
+      return "nw mid";
+    },
+    impactTag(impact) {
+      return impact === "利空" ? "🔴" : impact === "利好" ? "🟢" : "⚪";
+    },
+    async saveMorningPlaybook() {
+      if (!this.mgPlaybook.length) return;
+      this.pbSaving = true;
+      this.mgError = "";
+      this.mgSaved = "";
+      try {
+        const resp = await fetch("/api/playbook", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            summary: this.mgNews?.summary || "",
+            rows: this.mgPlaybook.map((r) => ({ code: r.code, name: r.name, overnight: r.overnight, action: r.action })),
+          }),
+        });
+        const r = await resp.json();
+        if (!r.ok) { this.mgError = r.error || "保存失败"; return; }
+        this.mgSaved = "已写入作战地图「每日盯盘记录」";
+        this.loadBattlemap(true);
+      } finally {
+        this.pbSaving = false;
+      }
+    },
     // ---- 回测 ----
     initBtChart() {
       this.$nextTick(() => {
@@ -578,6 +631,7 @@ const app = createApp({
     this.loadWatchlist();
     this.loadBattlemap();
     this.loadCheck();
+    this.loadMorning();
     setInterval(() => this.loadIndices(), 60000);
   },
 });
