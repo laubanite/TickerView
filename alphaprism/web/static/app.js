@@ -81,13 +81,6 @@ const app = createApp({
         .filter((i) => i.position && i.position.cost != null)
         .map((i) => ({ code: i.code, name: i.name, ...i.position }));
     },
-    currentInstrument() {
-      return (this.bm?.instruments || []).find((i) => i.code === this.current) || null;
-    },
-    hasPlan(sym) {
-      const ins = (this.bm?.instruments || []).find((i) => i.code === sym);
-      return !!(ins && ins.levels && ins.levels.length);
-    },
     levelLines() {
       const ins = this.currentInstrument();
       if (!ins) return [];
@@ -107,6 +100,13 @@ const app = createApp({
   },
 
   methods: {
+    currentInstrument() {
+      return (this.bm?.instruments || []).find((i) => i.code === this.current) || null;
+    },
+    hasPlan(sym) {
+      const ins = (this.bm?.instruments || []).find((i) => i.code === sym);
+      return !!(ins && ins.levels && ins.levels.length);
+    },
     setTab(t) { this.tab = t; this.view = ""; },
     toggleView(v) {
       this.view = this.view === v ? "" : v;
@@ -300,7 +300,7 @@ const app = createApp({
         silent: true,
         symbol: "none",
         label: { show: true, position: "insideEndTop", fontSize: 10, color: "#d1d4dc" },
-        data: this.levelLines(),
+        data: this.levelLines,
       };
     },
 
