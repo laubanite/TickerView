@@ -33,6 +33,22 @@ const app = createApp({
       closeMd: "",
       closeError: "",
       closeLoading: false,
+      // 盘前生成(里程碑2)
+      pbDraft: null,
+      pbMarkdown: "",
+      pbError: "",
+      pbLoading: false,
+      pbSaving: false,
+      pbSaved: "",
+      // 自选股管理(§5.6)
+      newSym: "",
+      wlMsg: "",
+      wlError: "",
+      // 盘中快照(§5.4)
+      snapMd: "",
+      snapError: "",
+      snapLoading: false,
+      snapPushing: false,
     };
   },
 
@@ -64,6 +80,29 @@ const app = createApp({
       return (this.bm?.instruments || [])
         .filter((i) => i.position && i.position.cost != null)
         .map((i) => ({ code: i.code, name: i.name, ...i.position }));
+    },
+    currentInstrument() {
+      return (this.bm?.instruments || []).find((i) => i.code === this.current) || null;
+    },
+    hasPlan(sym) {
+      const ins = (this.bm?.instruments || []).find((i) => i.code === sym);
+      return !!(ins && ins.levels && ins.levels.length);
+    },
+    levelLines() {
+      const ins = this.currentInstrument();
+      if (!ins) return [];
+      const map = {};
+      (ins.levels || []).forEach((l) => { map[l.name] = l.price; });
+      const out = [];
+      const ln = (name, color, type = "dashed") => {
+        if (map[name] != null) out.push({ yAxis: map[name], name: name, lineStyle: { color, type } });
+      };
+      ln("买区下沿", "#ffd166");
+      ln("买区上沿", "#ffd166");
+      ln("突破点", "#4c8dff", "dotted");
+      ln("减仓红线", "#ff9f6e", "solid");
+      ln("生命线", "#ff5c6c", "solid");
+      return out;
     },
   },
 
@@ -123,6 +162,69 @@ const app = createApp({
       if (r.ok) this.currentQuote = r.snapshot;
       this.loadKline();
     },
+
+    // ---- 自选股管理(§5.6) ----
+    async addSymbol() {
+      const sym = this.newSym.trim();
+      if (!sym) { this.wlError = "请输入代码"; return; }
+      this.wlError = "";
+      this.wlMsg = "";
+      try {
+        const resp = await fetch("/api/watchlist", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ symbol: sym }),
+        });
+        const r = await resp.json();
+        if (!r.ok) { this.wlError = r.error || "添加失败"; return; }
+        this.newSym = "";
+        this.wlMsg = r.duplicated ? `${sym} 已在池中` : `已添加 ${r.item.name}(${sym})`;
+        await this.loadWatchlist();
+      } catch (e) { this.wlError = String(e); }
+    },
+    async removeSymbol(sym) {
+      this.wlError = "";
+      this.wlMsg = "";
+      try {
+        const resp = await fetch("/api/watchlist?symbol=" + encodeURIComponent(sym), { method: "DELETE" });
+        const r = await resp.json();
+        if (!r.ok) { this.wlError = r.error || "删除失败"; return; }
+        this.wlMsg = `已移除 ${sym}`;
+        if (this.current === sym) this.current = "";
+        await this.loadWatchlist();
+      } catch (e) { this.wlError = String(e); }
+    },
+
+    // ---- 盘中快照(§5.4) ----
+    async loadSnapshot() {
+      this.snapError = "";
+      this.snapMd = "";
+      this.snapLoading = true;
+      try {
+        const r = await api("/api/snapshot");
+        if (!r.ok) { this.snapError = r.error || "快照失败"; return; }
+        this.snapMd = r.markdown;
+      } finally {
+        this.snapLoading = false;
+      }
+    },
+    async pushSnapshot() {
+      if (!this.snapMd) return;
+      this.snapPushing = true;
+      this.snapError = "";
+      try {
+        const resp = await fetch("/api/snapshot/push", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ markdown: this.snapMd }),
+        });
+        const r = await resp.json();
+        if (!r.ok) { this.snapError = r.error || "推送失败"; return; }
+        this.wlMsg = "已推送到手机";
+      } finally {
+        this.snapPushing = false;
+      }
+    },
     setPeriod(p) {
       this.period = p;
       this.loadKline();
@@ -174,7 +276,7 @@ const app = createApp({
           { name: "价格", type: "line", data: price, xAxisIndex: 0, yAxisIndex: 0,
             showSymbol: false, lineStyle: { width: 1.5, color: "#4c8dff" },
             itemStyle: { color: "#4c8dff" },
-            markLine: this.minAvgLine(r) },
+            markLine: r.period === "min" ? this.minAvgLine(r) : this.levelMarkLine() },
           { name: "成交量", type: "bar", data: vol, xAxisIndex: 1, yAxisIndex: 1,
             itemStyle: { color: (p) => (p.dataIndex > 0 && price[p.dataIndex] < price[p.dataIndex - 1] ? "#089981" : "#f23645") } },
         ],
@@ -190,6 +292,15 @@ const app = createApp({
         symbol: "none",
         data: [{ yAxis: last && last.avg != null ? last.avg : undefined, name: "均价" }],
         lineStyle: { color: "#e8b339", type: "dashed" },
+      };
+    },
+    levelMarkLine() {
+      // 速查卡价位自动叠线(买区/突破/减仓红线/生命线),越界自动隐藏由 ECharts 处理
+      return {
+        silent: true,
+        symbol: "none",
+        label: { show: true, position: "insideEndTop", fontSize: 10, color: "#d1d4dc" },
+        data: this.levelLines(),
       };
     },
 
@@ -217,10 +328,48 @@ const app = createApp({
     },
 
     // ---- 作战地图 ----
-    async loadBattlemap() {
-      if (this.battlemap) return;
+    async loadBattlemap(force = false) {
+      if (this.battlemap && !force) return;
       const r = await api("/api/battlemap");
       if (r.ok) { this.battlemap = r.model; this.mapFile = r.model.meta?.source_file || ""; }
+    },
+
+    // ---- 盘前生成(里程碑2) ----
+    async loadPlaybook() {
+      this.pbError = "";
+      this.pbSaved = "";
+      this.pbLoading = true;
+      try {
+        const r = await api("/api/playbook");
+        if (!r.ok) { this.pbError = r.error || "生成失败"; return; }
+        this.pbDraft = { summary: r.summary, rows: r.rows || [] };
+        this.pbMarkdown = r.markdown || "";
+      } finally {
+        this.pbLoading = false;
+      }
+    },
+    async savePlaybook() {
+      this.pbSaving = true;
+      this.pbError = "";
+      try {
+        const resp = await fetch("/api/playbook", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            summary: this.pbDraft.summary || "",
+            rows: (this.pbDraft.rows || []).map((r) => ({
+              code: r.code, name: r.name, overnight: r.overnight, action: r.action,
+            })),
+          }),
+        });
+        const r = await resp.json();
+        if (!r.ok) { this.pbError = r.error || "保存失败"; return; }
+        this.pbSaved = "已写入作战地图「每日盯盘记录」(可在下方/文件中继续编辑)";
+        this.pbDraft = null;
+        this.loadBattlemap(true);
+      } finally {
+        this.pbSaving = false;
+      }
     },
 
     // ---- 回测 ----

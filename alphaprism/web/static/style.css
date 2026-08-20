@@ -89,6 +89,8 @@ ul.disc li{margin-bottom:4px}
 .btn{background:#1b2333;border:1px solid var(--line);color:#fff;border-radius:6px;padding:7px 14px;cursor:pointer;font-size:13px;margin-top:8px}
 .btn:hover{background:#22304a}
 .btn.primary{background:#1d3a5f;border-color:#2a4a7a}
+.btn.mini{padding:0 6px;margin:0;font-size:11px;color:var(--dim)}
+.btn.mini:hover{color:var(--red)}
 
 /* ===== 快照输出 ===== */
 .shot{background:var(--panel2);border:1px solid var(--line);border-radius:8px;padding:10px;margin-top:8px;font-size:12px;line-height:1.7;white-space:pre-wrap}

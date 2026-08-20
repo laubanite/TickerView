@@ -2,3 +2,5 @@ akshare>=1.17
 pandas>=2.2
 pyyaml>=6.0
 requests>=2.31
+pywebview>=6.2   # 悬浮面板(里程碑7)
+flask>=3.0      # Web 行情页(里程碑6)

@@ -565,6 +565,14 @@ def _default_battlemap_path() -> str:
     return candidates[0] if candidates else ""
 
 
+def cmd_panel(_args) -> int:
+    """悬浮面板(里程碑7):pywebview 置顶小窗(状态灯+结论词),复用 check_live。"""
+    from alphaprism.planner.floatpanel import run_panel
+
+    run_panel()
+    return 0
+
+
 def cmd_web(_args) -> int:
     """启动 Web 行情页(里程碑6):Flask + Vue3 + ECharts,http://127.0.0.1:8765。"""
     from alphaprism.web.app import main as web_main
@@ -589,6 +597,27 @@ def cmd_close(args) -> int:
         print(f"\n✅ 已追加写入: {path}")
     else:
         print("\n(未写入;加 --write 才写入作战地图)")
+    return 0
+
+
+def cmd_playbook(args) -> int:
+    """盘前生成(里程碑2):剧本草稿 → 人工确认 → 追加写入作战地图「每日盯盘记录」。"""
+    path = args.path or _default_battlemap_path()
+    if not path:
+        print("未找到作战地图。用法: alphaprism playbook [path]")
+        return 1
+    model = parse_battlemap(path)
+    from alphaprism.planner.playbook import append_to_journal as pb_append
+    from alphaprism.planner.playbook import build_draft, format_draft
+
+    draft = build_draft(model)
+    md = format_draft(draft, model)
+    print(md)
+    if args.write:
+        pb_append(md, path)
+        print(f"\n✅ 已追加写入(盘前草稿): {path}")
+    else:
+        print("\n(草稿未写入;确认无误后加 --write 才写入作战地图)")
     return 0
 
 
@@ -788,6 +817,9 @@ def main() -> int:
     p = sub.add_parser("web", help="启动 Web 行情页(里程碑6):http://127.0.0.1:8765")
     p.set_defaults(func=cmd_web)
 
+    p = sub.add_parser("panel", help="悬浮面板(里程碑7):pywebview 置顶小窗(状态灯+结论词)")
+    p.set_defaults(func=cmd_panel)
+
     p = sub.add_parser("check", help="盘中核对(里程碑3):RuleModel×实时行情→结论词5档+大盘门控")
     p.add_argument("path", nargs="?", help="作战地图 .md 路径(默认 config 或 AITrader 最新)")
     p.add_argument("--json", action="store_true", help="输出完整核对 JSON")
@@ -797,6 +829,11 @@ def main() -> int:
     p.add_argument("path", nargs="?", help="作战地图 .md 路径(默认 config 或 AITrader 最新)")
     p.add_argument("--write", action="store_true", help="追加写入作战地图每日盯盘记录(默认只打印)")
     p.set_defaults(func=cmd_close)
+
+    p = sub.add_parser("playbook", help="盘前生成(里程碑2):剧本草稿→确认→追加写入作战地图")
+    p.add_argument("path", nargs="?", help="作战地图 .md 路径(默认 config 或 AITrader 最新)")
+    p.add_argument("--write", action="store_true", help="写入草稿到每日盯盘记录(默认只打印)")
+    p.set_defaults(func=cmd_playbook)
 
     p = sub.add_parser("backtest-map", help="作战地图回测(里程碑2):按整套可计算规则跑历史区间")
     p.add_argument("path", nargs="?", help="作战地图 .md 路径(默认 config 或 AITrader 最新)")

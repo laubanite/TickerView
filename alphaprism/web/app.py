@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import logging
 import os
+import re
 from pathlib import Path
 
 from flask import Flask, jsonify, request, send_from_directory
@@ -55,10 +56,45 @@ def create_app() -> Flask:
             logger.warning("指数快照失败: %s", exc)
             return jsonify({"ok": False, "error": str(exc)}), 502
 
-    # ------------------------------------------------------------ 自选股 + 核对
-    @app.route("/api/watchlist")
+    # ------------------------------------------------------------ 自选股(§5.6)
+    @app.route("/api/watchlist", methods=["GET", "POST", "DELETE"])
     def api_watchlist():
+        from ..config import WATCHLIST_FILE
+        import yaml
+
+        def _load():
+            if WATCHLIST_FILE.exists():
+                return list(yaml.safe_load(WATCHLIST_FILE.read_text(encoding="utf-8")) or [])
+            return []
+
+        def _save(items):
+            WATCHLIST_FILE.write_text(
+                yaml.safe_dump(items, allow_unicode=True, sort_keys=False), encoding="utf-8")
+
         try:
+            if request.method == "POST":
+                data = request.get_json(force=True) or {}
+                raw = str(data.get("symbol", "")).strip()
+                m = re.match(r"(\d{6})", raw)
+                sym = m.group(1) if m else raw
+                if not sym:
+                    return jsonify({"ok": False, "error": "缺少 symbol"}), 400
+                items = _load()
+                if any(i["symbol"] == sym for i in items):
+                    return jsonify({"ok": True, "duplicated": True})
+                name = data.get("name") or fetch_name(sym) or f"ETF{sym}"
+                category = data.get("category") or "行业"
+                items.append({"symbol": sym, "name": name, "category": category})
+                _save(items)
+                return jsonify({"ok": True, "item": {"symbol": sym, "name": name, "category": category}})
+            if request.method == "DELETE":
+                raw = str(request.args.get("symbol", ""))
+                m = re.match(r"(\d{6})", raw)
+                sym = m.group(1) if m else raw
+                items = [i for i in _load() if i["symbol"] != sym]
+                _save(items)
+                return jsonify({"ok": True})
+
             items = []
             for w in cfg.watchlist:
                 sym = str(w["symbol"])
@@ -66,11 +102,47 @@ def create_app() -> Flask:
                 items.append({
                     "symbol": sym,
                     "name": w.get("name") or fetch_name(sym) or sym,
+                    "category": w.get("category", ""),
                     "snapshot": snap,
                 })
             return jsonify({"ok": True, "items": items})
         except Exception as exc:  # noqa: BLE001
-            logger.warning("自选股快照失败: %s", exc)
+            logger.warning("自选股操作失败: %s", exc)
+            return jsonify({"ok": False, "error": str(exc)}), 502
+
+    # ------------------------------------------------------------ 盘中快照(§5.4)
+    @app.route("/api/snapshot")
+    def api_snapshot():
+        path = _battlemap_path(cfg)
+        if not path:
+            return jsonify({"ok": False, "error": "未找到作战地图"}), 404
+        try:
+            from ..planner.live import check_live
+            from ..planner.snapshot import build_snapshot
+
+            model = parse_battlemap(path)
+            r = check_live(model)
+            md = build_snapshot(model, r, cfg)
+            return jsonify({"ok": True, "markdown": md,
+                            "gate": r.get("gate"), "verdicts": r.get("verdicts")})
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("盘中快照失败: %s", exc)
+            return jsonify({"ok": False, "error": str(exc)}), 502
+
+    # ------------------------------------------------------------ 盘中快照推送
+    @app.route("/api/snapshot/push", methods=["POST"])
+    def api_snapshot_push():
+        data = request.get_json(force=True) or {}
+        md = data.get("markdown", "")
+        if not md:
+            return jsonify({"ok": False, "error": "缺少内容"}), 400
+        try:
+            from ..push import send
+
+            r = send("盘中快照", md, level="alert", cfg=cfg)
+            return jsonify(r)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("快照推送失败: %s", exc)
             return jsonify({"ok": False, "error": str(exc)}), 502
 
     # ------------------------------------------------------------ 单只行情
@@ -129,6 +201,33 @@ def create_app() -> Flask:
                             "summary": model.summary()})
         except Exception as exc:  # noqa: BLE001
             logger.warning("作战地图解析失败: %s", exc)
+            return jsonify({"ok": False, "error": str(exc)}), 502
+
+    # ------------------------------------------------------------ 盘前生成(里程碑2)
+    @app.route("/api/playbook", methods=["GET", "POST"])
+    def api_playbook():
+        path = _battlemap_path(cfg)
+        if not path:
+            return jsonify({"ok": False, "error": "未找到作战地图"}), 404
+        try:
+            from ..planner.playbook import append_to_journal as pb_append
+            from ..planner.playbook import build_draft, format_draft
+
+            model = parse_battlemap(path)
+            if request.method == "POST":
+                data = request.get_json(force=True) or {}
+                draft = {"date": "", "summary": data.get("summary", ""),
+                         "rows": data.get("rows", [])}
+                md = format_draft(draft, model)
+                pb_append(md, path)
+                return jsonify({"ok": True, "markdown": md})
+            draft = build_draft(model)
+            md = format_draft(draft, model)
+            return jsonify({"ok": True, "markdown": md,
+                            "summary": draft.get("summary", ""),
+                            "rows": draft.get("rows", [])})
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("盘前生成失败: %s", exc)
             return jsonify({"ok": False, "error": str(exc)}), 502
 
     # ------------------------------------------------------------ 盘中核对(里程碑3)
