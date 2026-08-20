@@ -1,0 +1,5 @@
+#!/usr/bin/env bash
+# AlphaPrism CLI wrapper (Git Bash / WSL / VS Code bash 终端)
+# bin/ 已加入 PATH 后,可直接敲: alphaprism --help
+export PYTHONUTF8=1
+exec "/d/Anaconda/python.exe" "E:/AgentProjects/AlphaPrism/scripts/cli.py" "$@"

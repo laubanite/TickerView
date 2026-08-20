@@ -1,0 +1,80 @@
+# AlphaPrism 主配置
+# 复权方式:前复权(qfq),与行情软件默认一致
+adjust: "qfq"
+
+# 日线拉取历史(年):结构分析用,拉足够历史
+daily_history_years: 3
+
+# 跟踪池:独立文件 config/watchlist.yaml(CLI 管理:alphaprism pool ...)
+# 持仓上限仍按 设计方案.md §5.3 最多同时 3 只
+
+# 网络策略:国内数据源应直连。本机存在 ALL_PROXY 环境变量指向未运行的本地代理,
+# 会阻断抓取;置 true 则抓取前强制清除代理环境变量。需要走代理时改 false。
+network:
+  no_proxy: true
+
+# 数据源开关
+sources:
+  kline: true         # ETF K线(腾讯直连:日线 qfq / 30分;新浪补当日)
+  wind_amount: true   # 成交额/换手率:Wind 全历史(经 wind-mcp-skill;免费 1000 积分/天)
+  fuyao: true         # 同花顺板块成交占比(X-api-key,key 在 settings.local.yaml)
+  fund_scale: false   # ETF 份额/规模 —— 暂缓(数据源待定,见 fetchers/etf_fund.py)
+  wind: false         # Wind AIFinMarket 行业信息(agent 通道,见 fetchers/wind.py)
+
+# 同花顺:各 ETF 板块 → 行业指数 thscode(2026-08-12 从 ths-index-list 核实)。
+# 板块成交占比 = 板块指数成交额 / 全市场成交额(000001.SH + 399106.SZ)。
+# 池内新增 ETF 需在此补一条,否则板块成交占比跳过该标的。
+fuyao:
+  sector_map:
+    "516020": {name: "化工", thscodes: ["881108.TI", "881109.TI"]}      # 化学原料+化学制品
+    "159796": {name: "电池", thscodes: ["881281.TI"]}
+    "159326": {name: "电网设备", thscodes: ["881278.TI"]}
+    "515790": {name: "光伏", thscodes: ["881279.TI"]}
+    "515050": {name: "通信", thscodes: ["881129.TI"]}
+    "159516": {name: "半导体设备", thscodes: ["884229.TI"]}
+    "518850": {name: "贵金属", thscodes: ["881169.TI"]}
+
+# 盘前新闻过滤:板块→关键词(新浪 7x24 命中即算"新催化")。词不够就加,注意别太宽(易误命中)。
+news:
+  pages: 1
+  page_size: 50
+  keywords:
+    "化工": [化工, 化学原料, 化学制品, 化纤, PEEK, 钛白粉, 纯碱, 化肥]
+    "电池": [电池, 锂电, 固态电池, 碳酸锂, 宁德时代, 比亚迪]
+    "电网设备": [电网, 特高压, 配网, 电力设备, 变压器, 智能电网, 换流]
+    "光伏": [光伏, 硅料, 组件, 逆变器, HJT, TOPCon, 钙钛矿]
+    "通信": [通信, 光模块, CPO, 光通信, 算力, 数据中心, 5G]
+    "半导体设备": [半导体, 晶圆, 光刻, 存储芯片, 国产替代, 中芯国际]
+    "贵金属": [黄金, 白银, 贵金属, 金价, 央行购金, 美联储]
+
+# 30分钟数据拉取窗口(交易日;akshare 分钟接口历史有限)
+kline_30m_days: 10
+
+# 日报输出目录
+report_dir: "reports"
+
+# 作战地图(里程碑1,§4.1):解析器输入。留空则自动找 AITrader 最新一份。
+battlemap:
+  path: ""
+
+# 推送(阶段5):信号强提醒 + 简报静默。webhook/密钥在 settings.local.yaml(已 gitignore)。
+# 通道:feishu / wecom / serverchan;先填 settings.local.yaml 对应 webhook 再置 enabled=true。
+push:
+  enabled: true
+  channel: feishu
+  llm_summary: true     # 盘后简报附 LLM 今日小结(规则+LLM 混合)
+
+# 盘中监测(阶段5):触发即推;llm_enrich 触发时用 LLM 补一句解读(短超时,失败退回规则消息)。
+monitor:
+  llm_enrich: true
+
+# 盘前催化状态判定 LLM(OpenRouter / SiliconFlow 免费模型,OpenAI 兼容)。
+# profiles = 尝试顺序:配额用尽/失败自动换下一个。key 在 settings.local.yaml llm.<provider>_key。
+llm:
+  profiles:
+    - {provider: zhipu, model: "glm-4-flash-250414"}                    # 智谱免费,实测稳定
+    - {provider: zhipu, model: "glm-4.7-flash"}                         # 智谱免费,偶发限流(切换兜底)
+    - {provider: siliconflow, model: "deepseek-ai/DeepSeek-V3"}         # 已验证,质量高
+    - {provider: siliconflow, model: "Qwen/Qwen2.5-7B-Instruct"}        # 备用(弱但稳)
+    - {provider: openrouter, model: "nvidia/nemotron-3-super-120b-a12b:free"}  # OpenRouter 兜底
+    - {provider: openrouter, model: "google/gemma-4-31b-it:free"}

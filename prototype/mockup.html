@@ -1,0 +1,1058 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>AlphaPrism 概念原型 · 看盘 + AI 辅助交易</title>
+<style>
+  :root{
+    --bg:#0b0e14; --panel:#131722; --panel2:#1a2030; --line:#232a38;
+    --text:#d1d4dc; --dim:#787b86; --red:#f23645; --green:#089981;
+    --yellow:#e8b339; --orange:#ff9800; --purple:#a56eff; --blue:#4c8dff;
+  }
+  *{margin:0;padding:0;box-sizing:border-box}
+  body{background:var(--bg);color:var(--text);font-family:"Microsoft YaHei",-apple-system,sans-serif;font-size:13px;overflow-x:hidden}
+  .up{color:var(--red)} .down{color:var(--green)} .flat{color:var(--dim)}
+  .dim{color:var(--dim)} .tag{display:inline-block;padding:0 6px;border-radius:3px;font-size:11px;line-height:16px}
+  .t-normal{background:#1f2633;color:#8a93a6}
+  .t-near{background:#3a2f14;color:var(--yellow)}
+  .t-hit{background:#4a1520;color:var(--red)}
+  .t-warn{background:#3a1a10;color:var(--orange)}
+  .t-hot{background:#2a1440;color:var(--purple)}
+  .t-ok{background:#0f332b;color:var(--green)}
+
+  /* ===== header ===== */
+  header{display:flex;align-items:center;gap:16px;padding:8px 16px;background:var(--panel);border-bottom:1px solid var(--line);position:sticky;top:0;z-index:50}
+  .logo{font-weight:700;font-size:15px;color:#fff;letter-spacing:1px}
+  .logo span{color:var(--blue)}
+  nav{display:flex;gap:4px;flex:1}
+  nav button{background:none;border:1px solid transparent;color:var(--dim);padding:6px 16px;border-radius:6px;cursor:pointer;font-size:13px}
+  nav button.on{background:#1b2333;color:#fff;border-color:var(--line)}
+  nav button.on::before{content:"";display:inline-block;width:6px;height:6px;border-radius:50%;background:var(--blue);margin-right:6px;vertical-align:1px}
+  /* 顶栏右侧按钮:与盘前/盘中/盘后 tab 同风格(选中蓝点+高亮框),仅位置在右侧 */
+  .hdr-actions{display:flex;gap:4px;margin-left:auto}
+  .hdr-actions button{background:none;border:1px solid transparent;color:var(--dim);padding:6px 16px;border-radius:6px;cursor:pointer;font-size:13px}
+  .hdr-actions button:hover{color:#fff}
+  .hdr-actions button.on{background:#1b2333;color:#fff;border-color:var(--line)}
+  .hdr-actions button.on::before{content:"";display:inline-block;width:6px;height:6px;border-radius:50%;background:var(--blue);margin-right:6px;vertical-align:1px}
+
+  /* ===== index strip ===== */
+  .idx-strip{display:flex;gap:10px;padding:10px 16px;background:var(--panel);border-bottom:1px solid var(--line)}
+  .idx{flex:1;background:var(--panel2);border:1px solid var(--line);border-radius:8px;padding:8px 12px;display:flex;flex-direction:column;gap:3px}
+  .idx .n{color:var(--dim);font-size:12px;display:flex;justify-content:space-between}
+  .idx .v{font-size:17px;font-weight:700}
+  .idx .s{font-size:12px;display:flex;gap:10px}
+  .idx.danger{border-color:#5c1a22;background:#17101a}
+
+  /* ===== main layout ===== */
+  main{display:flex;padding:10px 16px;gap:10px;align-items:flex-start}
+  .left{flex:1.45;display:flex;flex-direction:column;gap:10px;min-width:0}
+  .right{flex:1;display:flex;flex-direction:column;gap:10px;min-width:0}
+
+  .card{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:10px}
+  .card h3{font-size:12px;color:var(--dim);font-weight:600;margin-bottom:8px;display:flex;justify-content:space-between;align-items:center}
+  .add-btn{background:#1b2333;border:1px solid var(--blue);color:var(--blue);padding:2px 10px;border-radius:6px;cursor:pointer;font-size:11px}
+  .add-btn:hover{background:#183055}
+  .search-res{max-height:260px;overflow:auto;margin-top:8px}
+  .sr-row{display:flex;align-items:center;gap:10px;padding:8px 10px;border:1px solid var(--line);border-radius:8px;margin-bottom:6px;background:#0f141f}
+  .sr-row .nm{font-weight:600;width:90px}
+  .sr-row .px{margin-left:auto}
+  .sr-row button{background:#13233f;border:1px solid var(--blue);color:var(--blue);border-radius:6px;padding:3px 12px;cursor:pointer;font-size:11px}
+  .sr-row button:disabled{opacity:.4;cursor:default}
+  .sr-none{padding:20px;text-align:center;color:var(--dim);font-size:12px}
+
+  /* ===== watchlist ===== */
+  table.wl{width:100%;border-collapse:collapse}
+  table.wl th{font-size:11px;color:var(--dim);font-weight:400;text-align:right;padding:3px 6px;border-bottom:1px solid var(--line)}
+  table.wl th:first-child,table.wl td:first-child{text-align:left}
+  table.wl td{padding:5px 6px;text-align:right;border-bottom:1px solid #1a1f2c;white-space:nowrap}
+  table.wl tr.sel{background:#182032}
+  table.wl tbody tr{cursor:pointer}
+  table.wl tbody tr:hover{background:#161c29}
+  .stname{display:flex;align-items:center;gap:6px;font-weight:600}
+  .dot{width:7px;height:7px;border-radius:50%;flex:none}
+  .d-gray{background:#4a5263}.d-yellow{background:var(--yellow)}.d-red{background:var(--red);animation:blink 1.2s infinite}
+  .d-orange{background:var(--orange)}.d-purple{background:var(--purple)}
+  @keyframes blink{50%{opacity:.25}}
+  .chain{font-size:11px;color:var(--dim)}
+  .chain b{color:var(--text)}
+  .chain .done{color:var(--green)}
+
+  /* ===== chart card ===== */
+  .chart-head{display:flex;align-items:center;gap:10px;margin-bottom:6px}
+  .chart-head .tabs2{display:flex;gap:2px;background:#0f1420;border-radius:6px;padding:2px}
+  .chart-head .tabs2 button{background:none;border:none;color:var(--dim);padding:3px 12px;border-radius:4px;cursor:pointer;font-size:12px}
+  .chart-head .tabs2 button.on{background:#243049;color:#fff}
+  .chart-head .sym{font-weight:700;font-size:14px}
+  .chart-head .px{font-size:14px;font-weight:700;margin-left:auto}
+  .cwrap{position:relative;width:100%;height:460px}
+  canvas{display:block;width:100%;height:100%}
+  .markers{display:flex;gap:14px;margin-top:6px;font-size:11px;color:var(--dim);flex-wrap:wrap}
+  .markers b{color:var(--text)}
+
+  /* ===== side panel ===== */
+  .side{display:none}
+  .side.on{display:flex;flex-direction:column;gap:10px}
+  /* 作战地图独立全宽视图(顶栏右侧按钮进入,隐藏左侧图表+指数条) */
+  .map-view{display:none}
+  .map-view.on{display:block;padding:10px 16px}
+  .map-view .map-scroll{max-height:calc(100vh - 150px);overflow:auto;padding-right:4px}
+
+  /* 回测 / 模拟盘 独立全宽视图 */
+  .view{display:none}
+  .view.on{display:block;padding:10px 16px}
+  .view-head{display:flex;align-items:center;gap:10px;margin-bottom:12px}
+  .view-head h2{font-size:16px;color:#fff}
+  .view-head .sub{color:var(--dim);font-size:12px}
+  .view-body{display:flex;gap:12px;align-items:stretch}
+  .view-left{flex:1.2;min-width:0;display:flex;flex-direction:column}
+  .view-right{flex:1;min-width:0;display:flex;flex-direction:column}
+  .view-left .tbl-wrap,.view-right .tbl-wrap,.view-right .chart-box{flex-shrink:0}
+  .view-right .grow{flex:1}  /* 右侧最后一个框撑满剩余高度,与左侧底边对齐 */
+  /* 参数表单 */
+  .params{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:12px}
+  .params h3{font-size:12px;color:var(--dim);font-weight:600;margin-bottom:10px}
+  .p-grid{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+  .p-field{display:flex;flex-direction:column;gap:4px}
+  .p-field label{font-size:11px;color:var(--dim)}
+  .p-field input,.p-field select{background:#0f1420;border:1px solid var(--line);color:#fff;border-radius:6px;padding:7px 9px;font-size:13px;outline:none}
+  .p-field input:focus,.p-field select:focus{border-color:var(--blue)}
+  .p-field .hint{font-size:11px;color:var(--dim)}
+  .run-row{display:flex;align-items:center;gap:10px;margin-top:12px}
+  .run-btn{background:#13233f;border:1px solid var(--blue);color:var(--blue);padding:8px 22px;border-radius:8px;cursor:pointer;font-size:13px;font-weight:600}
+  .run-btn:hover{background:#183055}
+  /* 指标卡 */
+  .metrics{display:grid;grid-template-columns:repeat(4,1fr);gap:10px;margin-bottom:12px}
+  .metric{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:10px 12px}
+  .metric .k{font-size:11px;color:var(--dim);margin-bottom:4px}
+  .metric .v{font-size:20px;font-weight:700}
+  .metric .s{font-size:11px;color:var(--dim);margin-top:2px}
+  .metric .v.up{color:var(--red)}.metric .v.down{color:var(--green)}
+  .metric.bench{border-color:#2c3550}
+  /* 曲线占位 */
+  .chart-box{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:12px;margin-bottom:12px}
+  .chart-box h3{font-size:12px;color:var(--dim);font-weight:600;margin-bottom:8px}
+  .chart-canvas{width:100%;height:240px;background:#0d1119;border:1px solid #1e2636;border-radius:8px;display:flex;align-items:center;justify-content:center;color:var(--dim);font-size:12px}
+  /* 明细表 */
+  .tbl-wrap{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:12px}
+  .tbl-wrap h3{font-size:12px;color:var(--dim);font-weight:600;margin-bottom:8px}
+  table.dt{width:100%;border-collapse:collapse}
+  table.dt th{font-size:11px;color:var(--dim);font-weight:400;text-align:right;padding:4px 6px;border-bottom:1px solid var(--line)}
+  table.dt th:first-child,table.dt td:first-child{text-align:left}
+  table.dt td{padding:5px 6px;text-align:right;border-bottom:1px solid #1a1f2c;font-size:12px;white-space:nowrap}
+  .pos-tag{display:inline-block;padding:1px 7px;border-radius:4px;font-size:11px}
+  .pos-buy{background:#0f332b;color:var(--green)}
+  .pos-sell{background:#3a1a10;color:var(--orange)}
+  .pos-hold{background:#1f2633;color:#8a93a6}
+  /* 模拟盘持仓表 */
+  .sim-sum{display:grid;grid-template-columns:repeat(5,1fr);gap:10px;margin-bottom:12px}
+  .sim-pos td.sym{font-weight:600}
+  .map-scroll details{border:1px solid var(--line);border-radius:8px;margin-bottom:8px;background:#0f141f}
+  .map-scroll details summary{cursor:pointer;padding:8px 12px;font-size:13px;font-weight:600;color:#dfe3ec;list-style:none}
+  .map-scroll details summary::before{content:"▸ ";color:var(--blue)}
+  .map-scroll details[open] summary::before{content:"▾ "}
+  .map-scroll details summary:hover{background:#161c29}
+  .map-scroll details .mk,.map-scroll details p,.map-scroll details ul{padding:0 12px 10px}
+  .map-scroll details table.mk{width:calc(100% - 24px);margin:0 12px 10px}
+  /* 逐只操作表:列宽固定,触发条件左对齐,避免歪扭 */
+  table.op{width:100%;border-collapse:collapse;table-layout:fixed}
+  table.op th{font-size:11px;color:var(--dim);font-weight:400;text-align:left;padding:4px 6px;border-bottom:1px solid var(--line)}
+  table.op td{padding:4px 6px;border-bottom:1px solid #1a1f2c;font-size:12px;vertical-align:top;text-align:left}
+  table.op td.ac{width:16%;font-weight:600;color:#dfe3ec}
+  table.op td.cond{width:44%;color:#8a93a6}
+  table.op td.opr{width:40%}
+  .btn{width:100%;padding:8px;border-radius:8px;border:1px solid var(--blue);background:#13233f;color:var(--blue);font-size:13px;cursor:pointer;font-weight:600}
+  .btn:hover{background:#183055}
+  table.mk{width:100%;border-collapse:collapse}
+  table.mk th{font-size:11px;color:var(--dim);font-weight:400;text-align:right;padding:3px 5px;border-bottom:1px solid var(--line)}
+  table.mk th:first-child,table.mk td:first-child{text-align:left}
+  table.mk td{padding:4px 5px;text-align:right;border-bottom:1px solid #1a1f2c;font-size:12px;white-space:nowrap}
+  .ok{color:var(--green)} .no{color:var(--red)}
+  .shot{background:#0d1119;border:1px solid #1e2636;border-radius:8px;padding:10px;font-size:12px;line-height:1.7;color:#c5cad6;max-height:300px;overflow:auto}
+  .shot b{color:#fff}.shot .warn{color:var(--yellow)}.shot .risk{color:var(--red)}
+  .nw{font-size:12px;line-height:1.7;padding:5px 8px;border-radius:6px;margin-bottom:4px}
+  .nw.bad{background:#2a1118}.nw.mid{background:#232838}.nw.good{background:#0f2b24}
+  ul.disc{padding-left:18px;font-size:12px;line-height:1.9;color:#b8bfcc}
+  .two-col{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+
+  /* ===== floating panel ===== */
+  .float{position:fixed;right:14px;bottom:14px;width:350px;background:rgba(19,23,34,.93);border:1px solid #2c3550;border-radius:12px;box-shadow:0 8px 30px rgba(0,0,0,.6);z-index:100;backdrop-filter:blur(4px)}
+  .float .f-head{display:flex;align-items:center;gap:8px;padding:8px 12px;border-bottom:1px solid #232a3a}
+  .float .f-head .t{font-size:12px;font-weight:700}
+  .float .f-body{max-height:360px;overflow:auto}
+  .frow{display:flex;align-items:center;gap:8px;padding:5px 12px;font-size:12px;border-bottom:1px solid #1a1f2c}
+  .frow .nm{width:34px;color:var(--dim);font-weight:600}
+  .frow .px{width:52px;text-align:right;font-weight:700}
+  .frow .chg{width:52px;text-align:right}
+  .frow .concl{margin-left:auto;font-size:11px;font-weight:700;letter-spacing:.3px}
+  .conc-near{color:var(--yellow)}.conc-wait{color:var(--purple)}.conc-warn{color:var(--orange)}.conc-hit{color:var(--red);animation:blink 1.2s infinite}.conc-gray{color:#4a5263}
+  .tag-vol{font-size:10px;padding:1px 5px;border-radius:3px;line-height:14px}
+  .v-hi{background:#3a2f14;color:var(--yellow)}.v-lo{background:#14303a;color:#4cc9f0}.v-mid{background:#232838;color:var(--dim)}
+  .frow.dim-row{opacity:.45}
+  .float .f-foot{display:flex;gap:6px;padding:8px 12px}
+  .float .f-foot button{flex:1;padding:6px;border-radius:6px;border:1px solid var(--line);background:#1b2333;color:var(--text);font-size:12px;cursor:pointer}
+  .float .f-foot button.ai{background:#13233f;border-color:var(--blue);color:var(--blue)}
+  .float .mini{position:absolute;top:-14px;left:12px;background:#243049;color:#fff;font-size:10px;padding:2px 8px;border-radius:6px 6px 0 0}
+
+  /* modal */
+  .modal{position:fixed;inset:0;background:rgba(0,0,0,.6);z-index:200;display:none;align-items:center;justify-content:center}
+  .modal.on{display:flex}
+  .modal .box{background:var(--panel);border:1px solid var(--line);border-radius:12px;width:720px;max-height:84vh;overflow:auto;padding:16px}
+  .modal .close{float:right;background:none;border:none;color:var(--dim);font-size:16px;cursor:pointer}
+  .modal .doc-head h3{display:inline;font-size:16px}
+  .modal details{border:1px solid var(--line);border-radius:8px;margin-bottom:8px;background:#0f141f}
+  .modal details summary{cursor:pointer;padding:8px 12px;font-size:13px;font-weight:600;color:#dfe3ec;list-style:none}
+  .modal details summary::before{content:"▸ ";color:var(--blue)}
+  .modal details[open] summary::before{content:"▾ "}
+  .modal details summary:hover{background:#161c29}
+  .modal details .mk,.modal details p,.modal details ul{padding:0 12px 10px}
+  .modal details table.mk{width:calc(100% - 24px);margin:0 12px 10px}
+
+  .hint{position:fixed;left:16px;bottom:14px;color:#4a5263;font-size:11px;z-index:90}
+</style>
+</head>
+<body>
+
+<header>
+  <div class="logo">Alpha<span>Prism</span></div>
+  <nav>
+    <button id="tab-pm" class="on">盘前</button>
+    <button id="tab-pz">盘中</button>
+    <button id="tab-ph">盘后</button>
+  </nav>
+  <div class="hdr-actions">
+    <button id="btn-map">作战地图</button>
+    <button id="btn-backtest">回测</button>
+    <button id="btn-sim">模拟盘</button>
+  </div>
+</header>
+
+<div class="idx-strip" id="idx-strip">
+  <div class="idx danger">
+    <div class="n"><span>上证指数</span><span class="t-warn tag">破位防守</span></div>
+    <div class="v down">3940.54</div>
+    <div class="s"><span class="down">-1.25%</span><span class="dim">区间 3942-3974</span></div>
+  </div>
+  <div class="idx">
+    <div class="n"><span>科创综指</span><span></span></div>
+    <div class="v down">1382.15</div>
+    <div class="s"><span class="down">-0.86%</span><span class="dim">量能正常</span></div>
+  </div>
+  <div class="idx">
+    <div class="n"><span>深证成指</span><span></span></div>
+    <div class="v down">10127.40</div>
+    <div class="s"><span class="down">-1.52%</span></div>
+  </div>
+  <div class="idx">
+    <div class="n"><span>创业板指</span><span></span></div>
+    <div class="v down">2042.11</div>
+    <div class="s"><span class="down">-1.98%</span></div>
+  </div>
+</div>
+
+<main>
+  <div class="left" id="left-col">
+    <div class="card">
+      <h3>自选股 · 计划核对 <span class="dim">速查表驱动 · 点击切换图表</span>
+        <button class="add-btn" onclick="openSearch()">＋ 添加</button>
+      </h3>
+      <table class="wl">
+        <thead><tr><th>标的</th><th>现价</th><th>涨跌</th><th>量比</th><th>状态</th><th>规则链</th></tr></thead>
+        <tbody id="wl-body"></tbody>
+      </table>
+    </div>
+
+    <div class="card">
+      <div class="chart-head">
+        <span class="tabs2">
+          <button id="ct-day" class="on" onclick="setChart('day')">日K</button>
+          <button onclick="setChart('m30')">30分K</button>
+          <button onclick="setChart('min')">分时</button>
+        </span>
+        <span class="sym" id="c-sym">半导体设备 159516</span>
+        <span class="px down" id="c-px">0.772 -2.89%</span>
+      </div>
+      <div class="cwrap"><canvas id="cv"></canvas></div>
+      <div class="markers" id="c-markers"></div>
+    </div>
+  </div>
+
+  <div class="right">
+    <div class="card side on" id="side-pm">
+      <h3>隔夜重要消息 <span class="dim">8/19 · 利空主导</span></h3>
+      <div class="nw bad">🔴 美股三连跌:纳指 -1.33%、标普 -0.69%;<b>费城半导体 -4.98%</b>;存储崩(SK海力士/闪迪/希捷 -9%)、光模块崩(Coherent -12%/Lumentum -9%)、设备崩(泰瑞达 -8.8%/ASML -4.3%)</div>
+      <div class="nw bad">🔴 全球长债收益率集体飙升(美30Y 创 19 年峰值)+ 高油价 —— 估值杀的核心原因</div>
+      <div class="nw bad">🔴 现货金 -1.86% 报 4334,白银 -3.74%,金银跳水</div>
+      <div class="nw mid">⚪ OpenAI 暂停部分前沿模型推理任务两周(HuggingFace 事件)—— AI 链情绪小利空</div>
+      <div class="nw good">🟢 光伏硅片再涨价(18X 涨近 30%),<b>逻辑独立于美股</b>;碳酸锂 15.36 万/吨连涨 3 日创新高</div>
+      <h3 style="margin-top:12px">今日剧本 <span class="dim">2026-08-19 盘前</span></h3>
+      <table class="mk">
+        <thead><tr><th>品种</th><th>隔夜影响</th><th>今日动作</th></tr></thead>
+        <tbody>
+          <tr><td>半导体</td><td>设备/存储暴跌 → 低开</td><td>低开 0.75-0.77 缩量企稳 → 加仓①窗口;砸破 0.72 → 放弃</td></tr>
+          <tr><td>通信</td><td>光模块崩 → 低开</td><td>到 1.01-1.04 观察位不接,等缩量企稳</td></tr>
+          <tr><td>黄金</td><td>金价 -1.86% → 低开</td><td>回踩 8.75-8.85 企稳 → 加仓 100 股</td></tr>
+          <tr><td>光伏</td><td>硅片涨价对冲利空</td><td>最可能扛住;放量过 0.90 = 观察升级</td></tr>
+          <tr><td>化工</td><td>无利空</td><td>正常等回踩 0.855-0.860</td></tr>
+          <tr><td>电池</td><td>碳酸锂连涨小利好</td><td>等站稳 0.956</td></tr>
+          <tr><td>大盘</td><td>美股三连跌 → 低开</td><td>看 3974,破了全面防守</td></tr>
+        </tbody>
+      </table>
+      <h3 style="margin-top:10px">今日纪律</h3>
+      <ul class="disc">
+        <li>低开不接飞刀,只等"缩量企稳"信号</li>
+        <li>半导体加仓双条件缺一不买:<b>大盘守 3974 + 0.72-0.75 缩量企稳</b></li>
+        <li>昨天没追突破 = 又一次满分(隔夜一根美债新闻让突破吃 -4%)</li>
+      </ul>
+      <h3 style="margin-top:10px">持仓卡</h3>
+      <table class="mk" id="pos-card"></table>
+    </div>
+
+    <div class="card side" id="side-pz">
+      <h3>盘中实时核对 <span class="dim">剧本 × 速查表 × 实时行情</span></h3>
+      <table class="mk">
+        <thead><tr><th>标的</th><th>核对条件</th><th>当前</th><th>结论</th></tr></thead>
+        <tbody>
+          <tr><td>大盘</td><td>守住 3974</td><td>3940.54</td><td class="no">✗ 破位,全面防守</td></tr>
+          <tr><td>半导体</td><td>0.72-0.75 缩量企稳</td><td>0.772 阴跌中</td><td class="no">✗ 缺一不买</td></tr>
+          <tr><td>化工</td><td>放量过 0.885</td><td>0.876 量比3.44</td><td class="ok">⤳ 差 0.009,逆势勿追</td></tr>
+          <tr><td>光伏</td><td>守住 0.84 观察资格</td><td>0.864</td><td class="ok">⤳ 差 2.8%</td></tr>
+          <tr><td>通信</td><td>1.01-1.04 缩量企稳</td><td>1.062</td><td class="ok">⤳ 差 2.1%</td></tr>
+          <tr><td>黄金</td><td>8.75-8.85 企稳</td><td>9.086</td><td class="ok">⤳ 差 2.6%</td></tr>
+        </tbody>
+      </table>
+      <button class="btn" onclick="genShot()">🤖 生成盘中快照</button>
+      <div id="shot-box" class="shot" style="display:none"></div>
+    </div>
+
+    <div class="card side" id="side-ph">
+      <h3>收盘对账 <span class="dim">2026-08-19 · 待填</span></h3>
+      <div class="shot dim">16:00 后点击下方按钮生成:大盘关键位攻防 → 各标的"剧本 vs 实际"逐条核对 → 纪律评分。</div>
+      <button class="btn" onclick="alert('示例数据:收盘后由「程序核对 + LLM 解读」生成,格式见 8/18 对账模板')">📋 生成收盘对账</button>
+      <h3 style="margin-top:10px">复盘五问</h3>
+      <ul class="disc">
+        <li>大盘环境如何?(趋势 / 压力支撑 / J 值位置)</li>
+        <li>七只各自处于哪个阶段?(回踩 / 突破 / 持有 / 预警)</li>
+        <li>今天加/减仓没有?依据哪个信号?</li>
+        <li>哪一步判断错了?(信号失真 or 执行变形)</li>
+        <li>明日计划:谁的买点临近?谁的红线接近?</li>
+      </ul>
+      <h3 style="margin-top:10px">收盘后待办</h3>
+      <div class="dim" style="font-size:12px">回填收盘价、各品种是否触发信号、复盘五问 → 次日盘前剧本自动带上下文</div>
+    </div>
+  </div>
+</main>
+
+<div class="hint">概念原型 · 数据为 2026-08-19 剧本场景模拟 · 非真实行情</div>
+
+<!-- ===== 悬浮面板 ===== -->
+<div class="float" id="floatPanel">
+  <div class="mini">悬浮面板 · 可置顶 / 半透明</div>
+  <div class="f-head">
+    <span class="t">AlphaPrism</span>
+    <span class="t-warn tag">大盘破位 · 防守</span>
+    <span class="dim" style="margin-left:auto;font-size:11px">2026-08-19 10:03</span>
+  </div>
+  <div class="f-body" id="f-body"></div>
+  <div class="f-foot">
+    <button class="ai" onclick="switchTab('pz');genShot()">🤖 盘中快照</button>
+    <button onclick="switchTab('pz')">展开行情页 →</button>
+  </div>
+</div>
+
+<!-- ===== 搜索添加自选股 ===== -->
+<div class="modal" id="modal-search">
+  <div class="box" style="width:460px">
+    <button class="close" onclick="closeSearch()">✕</button>
+    <h3 style="margin-bottom:10px">添加自选股 <span class="dim" style="font-size:11px">临时观察股 · 无计划(仅行情+量能)</span></h3>
+    <div style="display:flex;gap:8px">
+      <input id="sr-q" placeholder="输入代码或名称,如 300750 / 宁德时代" style="flex:1;background:#0f1420;border:1px solid var(--line);color:#fff;border-radius:6px;padding:8px 10px;font-size:13px;outline:none" onkeydown="if(event.key==='Enter')doSearch()">
+      <button class="btn" style="width:auto;padding:8px 18px" onclick="doSearch()">搜索</button>
+    </div>
+    <div class="search-res" id="sr-res"></div>
+    <p class="dim" style="font-size:11px;margin-top:8px">提示:添加后如需买入/加仓结论,点该股「生成计划草稿」走盘前确认流写入作战地图,即升级为计划内标的。</p>
+  </div>
+</div>
+
+<!-- ===== 作战地图(独立全宽视图,顶栏右侧按钮进入) ===== -->
+<div class="map-view" id="map-view">
+  <div class="doc-head">
+    <h3>七只 ETF 持仓作战地图</h3>
+    <span class="dim">文档日期:2026-08-17(周一)· 版本 v2 · 数据来源:Wind</span>
+    <button style="float:right;background:#1b2333;border:1px solid var(--blue);color:var(--blue);padding:4px 10px;border-radius:6px;cursor:pointer">📝 在编辑器中打开</button>
+  </div>
+  <p class="dim" style="font-size:12px;margin:6px 0 8px">点击章节展开/折叠 · 悬浮面板和三个 tab 只消费它的衍生物(速查卡/持仓卡/剧本/对账)</p>
+  <div class="map-scroll">
+
+    <details open>
+      <summary>§一 大盘环境(上证指数 000001.SH)</summary>
+      <table class="mk"><tbody>
+        <tr><td>收盘</td><td>3982.65(+1.41%)</td><td class="dim">平量光头阳线,收在全天最高</td></tr>
+        <tr><td>关键均线</td><td>MA20 3979 / MA60 3984 / MA120 4024 / MA250 3974</td><td class="dim">站上 MA60 与 MA250,贴 MA60</td></tr>
+        <tr><td>MACD</td><td class="up">金叉红柱放大,DIF 上穿零轴</td><td class="dim">短线转强</td></tr>
+        <tr><td>KDJ</td><td class="up">K82.3 / D73.6 / <b>J99.7 超买</b></td><td class="dim">—</td></tr>
+        <tr><td>压力/支撑</td><td>4024(MA120) → 4175 / 3974-3979 → 3888</td><td class="dim">4024 是短线关口</td></tr>
+      </tbody></table>
+      <p><b>环境结论:</b>大盘"突破修复",但 J 值超买 + 4024 压力未过,短线看冲高回落 vs 放量突破二选一。大盘 J 值回落到 60 以下前,所有 ETF 不加仓。</p>
+    </details>
+
+    <details open>
+      <summary>§二 七只 ETF 一览表(2026-08-17 收盘)</summary>
+      <table class="mk">
+        <thead><tr><th>名称</th><th>代码</th><th>股数</th><th>成本</th><th>现价</th><th>浮亏%</th><th>解套需涨</th></tr></thead>
+        <tbody id="doc-pos"></tbody>
+      </table>
+      <p class="dim" style="font-size:12px">组合合计:市值 8826 / 成本 11782 / 浮亏 -2956(-25.1%);仓位 51%,可用子弹约 8500 元</p>
+    </details>
+
+    <details>
+      <summary>§三 逐只详细分析(7 只 · 关键位 + 操作表)</summary>
+      <div id="doc-anas"></div>
+    </details>
+
+    <details>
+      <summary>§四 基本面/消息面预警速查表</summary>
+      <table class="mk"><tbody>
+        <tr><td>化工</td><td>化工品价差 / 油价</td><td class="up">🟢 价差走阔+利润高增</td></tr>
+        <tr><td>半导体</td><td>晶圆厂资本开支 / 国产化订单</td><td class="up">🟢 中芯华虹扩产+大基金</td></tr>
+        <tr><td>电池</td><td>碳酸锂价 / 排产 / 龙头盈利</td><td class="flat">🟡 锂价回升但产能过剩</td></tr>
+        <tr><td>电网</td><td>特高压招标 / 电网投资</td><td class="up">🟢 5万亿规划+招标超额</td></tr>
+        <tr><td>光伏</td><td>多晶硅价 / 反内卷执行</td><td class="flat">🟡 政策托底但供给未出清</td></tr>
+        <tr><td>通信</td><td>云厂商 capex / CPO 放量</td><td class="up">🟢 CPO 量产+指引上修</td></tr>
+        <tr><td>黄金</td><td>美联储路径 / 央行购金</td><td class="up">🟢 央行21个月增持+非农弱</td></tr>
+      </tbody></table>
+    </details>
+
+    <details>
+      <summary>§五 操作优先级与资金分配</summary>
+      <ul class="disc">
+        <li>资金现状:仓位 51%,可用子弹约 8500 元,一半的钱等着打仗</li>
+        <li>化工(25%)→ 电网(20%)→ 半导体(15%)→ 通信(12%)→ 电池(12%)→ 黄金(8%)→ 预留(8%),光伏 0%(不加仓,反弹 0.92-0.94 换仓)</li>
+        <li>半导体升格:技术+基本面双最强,回踩均线加仓按<b>新交易</b>处理,独立止损</li>
+        <li>分批纪律:每只预算拆 2-3 批,第一批永远最小</li>
+      </ul>
+    </details>
+
+    <details>
+      <summary>§六 通用纪律</summary>
+      <ul class="disc">
+        <li>J 值 &gt;85 不追高(当前七只全部超标,本周只等回踩)</li>
+        <li>金字塔加仓:第一笔永远最小,每次都必须有企稳信号(缩量止跌 + KDJ 低位金叉 + 不再创新低)</li>
+        <li>每批加仓独立止损:新仓亏损 5% 无条件先减</li>
+        <li>留一手:减仓≠清仓,保留 1-2 成观察仓</li>
+        <li>回踩买、突破买,绝不追买;留出子弹,至少保留 2 批等极端情况</li>
+      </ul>
+    </details>
+
+    <details>
+      <summary>§七 风险提示</summary>
+      <ul class="disc">
+        <li>大盘 J≈100 超买 + 4024 压力未破:普涨结束就是普跌</li>
+        <li>光伏/电池中期均线全空头:反弹不改趋势</li>
+        <li>通信/半导体波动极大:单日 ±7-10%,仓位减半、限价单执行</li>
+        <li>利好集中释放后的回落风险同样要防</li>
+      </ul>
+    </details>
+
+    <details open>
+      <summary>§八 触发信号速查表</summary>
+      <table class="mk" id="quick-card"></table>
+    </details>
+
+    <details>
+      <summary>每日盯盘记录 · 2026-08-19(周三)盘前</summary>
+      <div class="shot">
+        <b class="risk">隔夜重大利空(改写昨日预案):</b><br>
+        🔴 美股三连跌(费半 -4.98%,存储/光模块/设备全崩)<br>
+        🔴 全球长债收益率飙升(美30Y 创 19 年峰值)+ 高油价<br>
+        🔴 现货金 -1.86%、白银 -3.74%<br>
+        ⚪ OpenAI 暂停部分前沿模型推理两周<br>
+        🟢 光伏硅片再涨价(+30%),碳酸锂 15.36 万连涨<br><br>
+        <b>今日剧本修正(相对 8/18 预案):</b><br>
+        半导体:低开 0.75-0.77 缩量企稳 → 加仓①窗口;砸破 0.72 → 放弃<br>
+        通信:到 1.01-1.04 不接,等缩量企稳<br>
+        黄金:回踩 8.75-8.85 企稳 → 加仓 100 股<br>
+        光伏:最可能扛住,放量过 0.90 = 观察升级<br>
+        大盘:看 3974,破了全面防守<br><br>
+        <b>今日纪律:</b>低开不接飞刀;半导体加仓双条件缺一不买(大盘守 3974 + 0.72-0.75 缩量企稳);昨天没追突破=满分<br><br>
+        <span class="dim">收盘对账(待填):—</span>
+      </div>
+    </details>
+
+    <details>
+      <summary>每日盯盘记录 · 2026-08-18(周二)收盘对账(示例)</summary>
+      <div class="shot">
+        大盘:收 3990.30(+0.19%),V 型反转,收复 3974/3979/3982,距 4024 仅 34 点<br>
+        半导体:收 0.795(+1.79%),站稳前高 0.788 且尾盘新高——<b>突破成立,等回踩加仓②</b><br>
+        光伏:收 0.890(+0.45%),放量 32 亿份收复昨高——<b>换仓暂停、改观察确认</b><br>
+        通信:收 1.101(-1.43%),全天最弱,勉强守 1.10<br>
+        化工/黄金/电池/电网:无信号<br>
+        <b>纪律评分:满分 ✅</b> 全天零操作,盘前"高开不追"与"破 3974 暂停"全部验证正确
+      </div>
+    </details>
+  </div>
+</div>
+
+<!-- ===== 回测视图(规则有效性检验) ===== -->
+<div class="view" id="backtest-view">
+  <div class="view-head">
+    <h2>回测</h2>
+    <span class="sub">按作战地图整套可计算规则跑历史 · 验证规则体系整体有效性 · 不含消息/情绪信息层</span>
+  </div>
+  <div class="view-body">
+    <div class="view-left">
+      <div class="params">
+        <h3>回测参数</h3>
+        <div class="p-grid">
+          <div class="p-field"><label>开仓时点</label><input type="date" value="2026-01-05"></div>
+          <div class="p-field"><label>回测区间终点</label><input type="date" value="2026-08-19"></div>
+          <div class="p-field"><label>初始本金(元)</label><input type="number" value="17300"></div>
+          <div class="p-field"><label>规则来源</label><select><option>作战地图 §五 预算分配</option></select></div>
+        </div>
+        <div class="p-field" style="margin-top:10px">
+          <label>参与回测标的(按作战地图 §五 预算)</label>
+          <div class="hint">化工25% · 电网20% · 半导体15% · 通信12% · 电池12% · 黄金8% · 预留8% · 光伏0%(不加仓)</div>
+        </div>
+        <div class="run-row">
+          <button class="run-btn" onclick="runBacktest()">▶ 运行回测</button>
+          <span class="hint">仅执行可计算规则(回踩/突破/止损/红线);含"情绪面/消息面"的主观条件不纳入,结果标注。</span>
+        </div>
+      </div>
+
+      <div class="metrics" style="margin-top:12px">
+        <div class="metric"><div class="k">总收益率</div><div class="v up" id="bt-ret">—</div><div class="s" id="bt-ret-s">待运行</div></div>
+        <div class="metric"><div class="k">最大回撤</div><div class="v down" id="bt-mdd">—</div><div class="s">回撤幅度</div></div>
+        <div class="metric bench"><div class="k">买入持有(基准)</div><div class="v" id="bt-bh">—</div><div class="s">同期同标的</div></div>
+        <div class="metric"><div class="k">超额收益</div><div class="v" id="bt-alpha">—</div><div class="s">规则 vs 基准</div></div>
+      </div>
+
+      <div class="chart-box">
+        <h3>净值曲线 <span class="dim">作战地图规则 vs 买入持有</span></h3>
+        <div class="chart-canvas" id="bt-chart">运行回测后显示净值曲线(示意)</div>
+      </div>
+
+      <div class="tbl-wrap">
+        <h3>交易明细 <span class="dim">每笔触发动作</span></h3>
+        <table class="dt">
+          <thead><tr><th>日期</th><th>标的</th><th>动作</th><th>价格</th><th>股数</th><th>盈亏%</th><th>触发条件</th></tr></thead>
+          <tbody id="bt-trades"><tr><td colspan="7" class="dim" style="text-align:center">运行回测后显示</td></tr></tbody>
+        </table>
+      </div>
+    </div>
+
+    <div class="view-right">
+      <div class="chart-box">
+        <h3>回测区间内 · 各标的走势</h3>
+        <div class="chart-canvas" style="height:300px">开仓时点至今的 K 线 + 关键位叠线(示意)</div>
+      </div>
+      <div class="chart-box">
+        <h3>规则触发时间轴</h3>
+        <div class="chart-canvas" style="height:200px">各标的 加仓/减仓/止损 触发点(示意)</div>
+      </div>
+      <div class="tbl-wrap grow">
+        <h3>结论 <span class="dim">规则体系整体有效性</span></h3>
+        <div class="shot" id="bt-concl" style="max-height:none">
+          运行回测后,给出:这套规则整体是否跑赢买入持有、最大回撤是否可接受、哪些规则贡献了主要收益/回撤。
+          <br><span class="dim">注:本页测的是"规则骨架"(可计算部分),不含消息/情绪信息层——信息层有效性由模拟盘逐日评估。</span>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ===== 模拟盘视图(从今天起逐日记账) ===== -->
+<div class="view" id="sim-view">
+  <div class="view-head">
+    <h2>模拟盘</h2>
+    <span class="sub">从今天起,按完整决策(信息 + 规则)逐日记账 · 测"你真正会执行的系统"</span>
+  </div>
+  <div class="view-body">
+    <div class="view-left">
+      <div class="params">
+        <h3>模拟盘设置</h3>
+        <div class="p-grid">
+          <div class="p-field"><label>初始本金(元)</label><input type="number" value="17300"></div>
+          <div class="p-field"><label>开始日期</label><input type="date" value="2026-08-20"></div>
+          <div class="p-field"><label>初始持仓</label><select><option>读作战地图 §二 持仓表</option></select></div>
+          <div class="p-field"><label>每笔预算</label><select><option>作战地图 §五 预算占比</option></select></div>
+        </div>
+        <div class="run-row">
+          <button class="run-btn" onclick="startSim()">▶ 开始记账</button>
+          <span class="hint">模拟盘与回测共用同一规则引擎,只是区间终点=今天,持续滚动。</span>
+        </div>
+      </div>
+
+      <div class="sim-sum" style="margin-top:12px">
+        <div class="metric"><div class="k">账户总值</div><div class="v" id="sm-total">—</div><div class="s">现金+持仓市值</div></div>
+        <div class="metric"><div class="k">现金</div><div class="v" id="sm-cash">—</div><div class="s">可用子弹</div></div>
+        <div class="metric"><div class="k">累计收益率</div><div class="v" id="sm-ret">—</div><div class="s">自开始日</div></div>
+        <div class="metric"><div class="k">最大回撤</div><div class="v down" id="sm-mdd">—</div><div class="s">回撤幅度</div></div>
+        <div class="metric"><div class="k">今日盈亏</div><div class="v" id="sm-today">—</div><div class="s">较昨收</div></div>
+      </div>
+
+      <div class="chart-box">
+        <h3>账户净值曲线 <span class="dim">逐日累计</span></h3>
+        <div class="chart-canvas" id="sm-chart">开始记账后逐日更新(示意)</div>
+      </div>
+
+      <div class="tbl-wrap">
+        <h3>当前持仓</h3>
+        <table class="dt sim-pos">
+          <thead><tr><th class="sym">标的</th><th>股数</th><th>成本</th><th>现价</th><th>市值</th><th>浮盈%</th><th>状态</th></tr></thead>
+          <tbody id="sm-pos"><tr><td colspan="7" class="dim" style="text-align:center">开始记账后显示</td></tr></tbody>
+        </table>
+      </div>
+    </div>
+
+    <div class="view-right">
+      <div class="tbl-wrap">
+        <h3>每日流水 <span class="dim">触发记录</span></h3>
+        <table class="dt">
+          <thead><tr><th>日期</th><th>标的</th><th>动作</th><th>价格</th><th>股数</th><th>依据</th></tr></thead>
+          <tbody id="sm-flow"><tr><td colspan="6" class="dim" style="text-align:center">开始记账后显示</td></tr></tbody>
+        </table>
+      </div>
+      <div class="chart-box" style="margin-top:12px">
+        <h3>信息层评估 <span class="dim">催化判定 → 后续 N 日验证</span></h3>
+        <div class="chart-canvas" style="height:180px" id="sm-info-chart">
+          催化判定准确率 + 信息层 alpha 累计(示意)
+        </div>
+        <div class="metrics" style="grid-template-columns:repeat(3,1fr);margin-top:8px">
+          <div class="metric"><div class="k">催化判定数</div><div class="v" style="font-size:16px" id="sm-info-n">—</div><div class="s">累计</div></div>
+          <div class="metric"><div class="k">判定准确率</div><div class="v" style="font-size:16px" id="sm-info-acc">—</div><div class="s">增强/减弱命中</div></div>
+          <div class="metric"><div class="k">信息层 alpha</div><div class="v" style="font-size:16px" id="sm-info-alpha">—</div><div class="s">vs 无信息基准</div></div>
+        </div>
+        <div class="shot" style="max-height:none;margin-top:8px">
+          <span class="dim">每个催化判定(增强/减弱/新增/未变)记录 → 后续 N 日验证该判定对不对 → 统计信息层是否带来 alpha。这是回测无法覆盖的部分,只能靠模拟盘逐日积累真实证据。</span>
+        </div>
+      </div>
+      <div class="tbl-wrap grow" style="margin-top:12px">
+        <h3>关键位监控 <span class="dim">逐只速查表 × 当前价</span></h3>
+        <table class="dt">
+          <thead><tr><th>标的</th><th>现价</th><th>买区</th><th>突破</th><th>减仓线</th><th>生命线</th><th>距触发</th></tr></thead>
+          <tbody id="sm-levels"><tr><td colspan="7" class="dim" style="text-align:center">开始记账后显示</td></tr></tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+/* ================= 数据 ================= */
+const SYMS = [
+  {name:"化工",   code:"516020", base:0.876, chg:"+0.34%", vr:3.44, vol:"放量", volc:"v-hi",  st:"near", stt:"接近买点",  tag:"t-near",  chain:'距 0.885 差 1 档,放量', levels:{buy:[0.855,0.860],brk:0.885,cut:0.849,life:0.778}},
+  {name:"半导体", code:"159516", base:0.772, chg:"-2.89%", vr:2.50, vol:"放量", volc:"v-hi",  st:"wait", stt:"等待·缺条件", tag:"t-hot",   chain:'接近买区,但大盘破位+未企稳', levels:{buy:[0.720,0.750],brk:0.788,cut:0.700,life:0.604}},
+  {name:"通信",   code:"515050", base:1.062, chg:"-3.54%", vr:3.14, vol:"放量", volc:"v-hi",  st:"warn", stt:"接近卖点",  tag:"t-warn",  chain:'观察位 1.01-1.04 在下方,等企稳', levels:{buy:[1.010,1.040],brk:1.170,cut:1.010,life:0.860}},
+  {name:"光伏",   code:"515790", base:0.864, chg:"-2.92%", vr:2.46, vol:"放量", volc:"v-hi",  st:"gray", stt:"平静",     tag:"t-normal",chain:'守住 0.84 才有观察资格', levels:{buy:[0.920,0.940],brk:0.900,cut:0.840,life:0.770}},
+  {name:"黄金",   code:"518850", base:9.086, chg:"-0.91%", vr:1.00, vol:"平量", volc:"v-mid", st:"gray", stt:"平静",     tag:"t-normal",chain:'买区 8.75-8.85 还差 2.6%', levels:{buy:[8.750,8.850],brk:9.500,cut:8.550,life:8.300}},
+  {name:"电池",   code:"159796", base:0.884, chg:"-1.78%", vr:3.04, vol:"放量", volc:"v-hi",  st:"gray", stt:"平静",     tag:"t-normal",chain:'等站稳 0.956', levels:{buy:[0.855,0.865],brk:0.956,cut:0.830,life:0.775}},
+  {name:"电网",   code:"159326", base:1.700, chg:"-2.80%", vr:2.36, vol:"平量", volc:"v-mid", st:"gray", stt:"平静",     tag:"t-normal",chain:'1.68 支撑,破了减 1/3', levels:{buy:[1.650,1.680],brk:1.872,cut:1.650,life:1.501}},
+];
+const POS = [
+  ["化工 516020","2000","0.879","0.876","-0.3%"],
+  ["半导体 159516","500","1.825","0.772","-57.7%"],
+  ["电池 159796","1800","1.171","0.884","-24.5%"],
+  ["电网 159326","900","2.606","1.700","-34.8%"],
+  ["光伏 515790","1500","1.252","0.864","-31.0%"],
+  ["通信 515050","1100","1.616","1.062","-34.3%"],
+  ["黄金 518850","100","10.015","9.086","-9.3%"],
+];
+
+function mulberry32(a){return function(){a|=0;a=a+0x6D2B79F5|0;var t=Math.imul(a^a>>>15,1|a);t=t+Math.imul(t^t>>>7,61|t)^t;return((t^t>>>14)>>>0)/4294967296}}
+
+/* ================= 渲染 ================= */
+const CONC={gray:'conc-gray',near:'conc-near',wait:'conc-wait',warn:'conc-warn',hit:'conc-hit',noplan:'conc-gray'};
+const DOT={gray:'d-gray',near:'d-yellow',hit:'d-red',warn:'d-orange',wait:'d-purple',hot:'d-purple',noplan:'d-gray'};
+function renderWL(){
+  const t=document.getElementById('wl-body');
+  t.innerHTML=SYMS.map((s,i)=>`<tr class="${i===sel?'sel':''}" onclick="pick(${i})">
+    <td><span class="stname"><span class="dot ${DOT[s.st]}"></span>${s.name}</span></td>
+    <td class="${s.chg[0]==='-'?'down':'up'}">${s.base.toFixed(3)}</td>
+    <td class="${s.chg[0]==='-'?'down':'up'}">${s.chg}</td>
+    <td>${s.vr}</td>
+    <td><span class="tag ${s.tag}">${s.stt}</span>${s.st==='noplan'?' <a href="javascript:void(0)" onclick="genDraft(\''+s.code+'\')" style="color:var(--blue);font-size:11px">生成草稿</a>':''}</td>
+    <td class="chain">${s.chain}</td></tr>`).join('');
+}
+function genDraft(code){
+  const s=SYMS.find(x=>x.code===code);
+  alert(`生成计划草稿(${s.name} ${s.code})\n\nAI 按「低吸决策 + 交易计划」方法论,结合该股技术面/基本面,生成一份草稿:关键位 / 回踩买点 / 突破买点 / 止损 / 红线。\n\n→ 走盘前确认流人工确认/修改后写入作战地图,即升级为计划内标的:速查卡出现该股价位,悬浮面板开始给完整结论词。`);
+}
+function renderFloat(){
+  const t=document.getElementById('f-body');
+  t.innerHTML=SYMS.map(s=>`<div class="frow ${(s.st==='gray'||s.st==='noplan')?'dim-row':''}">
+      <span class="nm">${s.name}</span>
+      <span class="px ${s.chg[0]==='-'?'down':'up'}">${s.base.toFixed(3)}</span>
+      <span class="chg ${s.chg[0]==='-'?'down':'up'}">${s.chg}</span>
+      <span class="tag-vol ${s.volc}">${s.vol}</span>
+      <span class="concl ${CONC[s.st]}">${s.stt}</span>
+  </div>`).join('');
+}
+function renderPos(){
+  document.getElementById('pos-card').innerHTML=
+    '<thead><tr><th>标的</th><th>股数</th><th>成本</th><th>现价</th><th>浮亏</th></tr></thead>'+
+    POS.map(p=>`<tr><td>${p[0]}</td><td>${p[1]}</td><td>${p[2]}</td><td>${p[3]}</td><td class="${p[4][0]==='-'?'down':'up'}">${p[4]}</td></tr>`).join('');
+  document.getElementById('doc-pos').innerHTML=POS.map(p=>{
+    const [n,c]=p[0].split(' ');return `<tr><td>${n}</td><td>${c}</td><td>${p[1]}</td><td>${p[2]}</td><td>${p[3]}</td><td class="${p[4][0]==='-'?'down':'up'}">${p[4]}</td><td class="dim">+${(p[2]/p[3]-1).toFixed(1)}%</td></tr>`}).join('');
+}
+const ACTIONS={
+  化工:{tip:"本仓为解套主攻方向",rows:[["加仓①","回踩 0.855-0.860 缩量企稳 + KDJ 低位金叉","加第一批(预算25%)"],["加仓②","放量≥1.5亿份突破 0.885 站稳 2 日","加第二批(预算20%)"],["减仓红线","放量跌破 0.849","减 1/3-1/2,留一手"]]},
+  半导体:{tip:"技术面+基本面双最强,回踩加仓=新交易,独立止损",rows:[["加仓①","回踩 0.72-0.75 缩量企稳","加 1500-2000 股(预算15%)"],["加仓②","放量突破 0.788 回踩 0.76-0.77 不破","再加 1500 股"],["新仓止损","跌破 0.70 或单笔 -8%","无条件减新仓"],["清仓红线","跌破 0.60(双底破位)","全仓清掉"]]},
+  通信:{tip:"弹性最大,仓位减半处理",rows:[["加仓①","回踩 1.01-1.04 缩量企稳","加 1100-1200 股(预算15%)"],["加仓②","放量突破 1.17(MA60)","加约 750 股(预算10%)"],["减仓红线","放量跌破 1.01","减 1/2"]]},
+  光伏:{tip:"弱势仓,反弹换仓窗口,禁止新钱",rows:[["不加仓","任何回踩","本品种禁止新钱"],["换仓","反弹至 0.92-0.94 或缩量滞涨","减 1/2,资金换化工/电网"],["放弃标准","跌破 0.770","清仓换方向"]]},
+  黄金:{tip:"分散配置仓,做长不做短",rows:[["加仓","回踩 8.75-8.85 企稳","分批加(每次预算10%)"],["确认","放量突破 9.50(MA120)","加第二批"],["减仓红线","跌破 8.55 且收不回","减 1/3"]]},
+  电池:{tip:"锂价回升但产能过剩未解,等站稳 MA60",rows:[["加仓","回踩 0.855-0.865 缩量企稳","第一批(预算10%)"],["确认","放量站稳 0.956 两日","第二批(预算10%)"],["减仓红线","放量跌破 0.83","减 1/3,留一手"]]},
+  电网:{tip:"组合最大亏损仓,技术量能最强,加仓优先",rows:[["加仓①","回踩 1.65-1.68 缩量企稳","第一批(预算25%)"],["加仓②","放量突破 1.872 站稳 2 日","第二批(预算15%)"],["减仓红线","放量跌破 1.65","减 1/3-1/2,留一手"]]},
+};
+function renderDocAnas(){
+  document.getElementById('doc-anas').innerHTML=SYMS.filter(s=>ACTIONS[s.name]).map(s=>{
+    const a=ACTIONS[s.name];const lv=s.levels;
+    const rows=a.rows.map(r=>`<tr><td class="ac">${r[0]}</td><td class="cond">${r[1]}</td><td class="opr">${r[2]}</td></tr>`).join('');
+    const keyline=`<div style="margin:6px 2px 0;font-size:11px;color:var(--dim)">关键位 · 回踩买区 <b style="color:var(--blue)">${lv.buy.join('-')}</b> · 突破 <b style="color:var(--purple)">${lv.brk}</b> · 减仓线 <b style="color:var(--orange)">${lv.cut}</b> · 生命线 <b style="color:var(--red)">${lv.life}</b></div>`;
+    return `<div style="border:1px solid var(--line);border-radius:8px;margin:0 12px 10px;background:#0f141f;padding:8px 10px">
+      <b>${s.name} ${s.code}</b> <span class="dim" style="font-size:11px">${a.tip}</span>
+      <table class="op" style="margin-top:6px"><thead><tr><th>动作</th><th>触发条件</th><th>具体操作</th></tr></thead><tbody>
+        ${rows}
+      </tbody></table>${keyline}</div>`}).join('');
+}
+function renderQuick(){
+  document.getElementById('quick-card').innerHTML=
+    '<thead><tr><th>品种</th><th>回踩买点</th><th>突破买点</th><th>减仓红线</th><th>生命线</th></tr></thead>'+
+    SYMS.filter(s=>s.levels).map(s=>`<tr><td>${s.name}</td><td>${s.levels.buy.join('-')}</td><td>${s.levels.brk}</td><td>${s.levels.cut}</td><td>${s.levels.life}</td></tr>`).join('');
+}
+
+/* ================= 图表 ================= */
+let sel=1, ctype='day', cv, ctx, W,H;
+function pick(i){sel=i;renderWL();renderChart();}
+function setChart(t){ctype=t;document.querySelectorAll('.chart-head .tabs2 button').forEach(b=>b.classList.remove('on'));
+  document.querySelectorAll('.chart-head .tabs2 button')[['day','m30','min'].indexOf(t)].classList.add('on');renderChart();}
+
+function genBars(base, n, vol, seed, drift){
+  const rnd=mulberry32(seed); let c=base, out=[];
+  for(let i=0;i<n;i++){
+    const o=c;
+    const move=(drift[i]||0)+(rnd()-0.5)*vol;
+    c=o*(1+move);
+    const body=Math.abs(c-o);
+    const wickU=body*0.25+rnd()*vol*c*0.3;
+    const wickD=body*0.25+rnd()*vol*c*0.3;
+    const h=Math.max(o,c)+wickU, l=Math.min(o,c)-wickD;
+    const v=(0.35+rnd()*1.1)*(1+body/o*12);
+    out.push({o,h,l,c,v});
+  }
+  return out;
+}
+function barsFor(s){
+  const n=ctype==='m30'?48:80;
+  const drift={};
+  if(ctype==='m30'){
+    for(let i=0;i<n;i++)drift[i]=i<n/2?0.0005:-0.0012;
+    return genBars(s.base*0.98,n,0.005,42+s.code*1,drift);
+  }
+  const seg=Math.round(n/3);
+  for(let i=0;i<n;i++){
+    if(i<seg)drift[i]=0.0016;
+    else if(i<seg*2)drift[i]=0.0021;
+    else drift[i]=-0.0013;
+  }
+  return genBars(s.base*0.70,n,0.006,42+s.code*1,drift);
+}
+function MA(a,w){return a.map((_,i)=>{if(i<w-1)return null;let s=0;for(let j=i-w+1;j<=i;j++)s+=a[j];return s/w})}
+function MACD(c){
+  const e=(arr,w)=>{const out=[null];let prev=arr[0];for(let i=1;i<arr.length;i++){prev=prev+(arr[i]-prev)*2/(w+1);out.push(prev)}return out};
+  const e12=e(c,12),e26=e(c,26);const dif=c.map((_,i)=>e12[i]-e26[i]);
+  const dea=[null];let p=0;for(let i=1;i<dif.length;i++){p=p+(dif[i]-p)*2/10;dea.push(p)}
+  return {dif,dea,macd:dif.map((d,i)=>2*(d-dea[i]))};
+}
+function KDJ(c){
+  const K=[],D=[],J=[];let k=50,d=50;
+  for(let i=0;i<c.length;i++){
+    const lo=Math.min(...c.slice(Math.max(0,i-8),i+1));
+    const hi=Math.max(...c.slice(Math.max(0,i-8),i+1));
+    const rsv=hi===lo?50:(c[i]-lo)/(hi-lo)*100;
+    k=k*2/3+rsv/3; d=d*2/3+k/3; K.push(k);D.push(d);J.push(3*k-2*d);
+  }
+  return {K,D,J};
+}
+
+function renderChart(){
+  const s=SYMS[sel];
+  document.getElementById('c-sym').textContent=s.name+' '+s.code;
+  document.getElementById('c-px').innerHTML=`${s.base.toFixed(3)} ${s.chg}<span class="dim" style="font-size:11px;margin-left:8px">量比 ${s.vr}</span>`;
+  cv=document.getElementById('cv');ctx=cv.getContext('2d');
+  W=cv.clientWidth;H=cv.clientHeight;
+  cv.width=W*devicePixelRatio;cv.height=H*devicePixelRatio;
+  ctx.setTransform(devicePixelRatio,0,0,devicePixelRatio,0,0);
+  ctx.clearRect(0,0,W,H);
+  if(ctype==='min'){drawMinute(s);return;}
+  const bars=barsFor(s);
+  const closes=bars.map(b=>b.c);
+  const ma5=MA(closes,5),ma10=MA(closes,10),ma20=MA(closes,20);
+  const macd=MACD(closes),kdj=KDJ(closes);
+  const upH=H*0.52, volH=H*0.12, indH=H*0.33;
+  const lv=s.levels||{};
+  // y-range: 数据 + 6% 留白;关键位线只在范围内才画
+  let lo=Math.min(...bars.map(b=>b.l)), hi=Math.max(...bars.map(b=>b.h));
+  const pad=(hi-lo)*0.06; lo-=pad; hi+=pad;
+  const inRange=v=>v>=lo&&v<=hi;
+  const x=i=>12+i*(W-24)/bars.length;
+  const y=v=>upH-(v-lo)/(hi-lo)*(upH-14);
+  // 关键位线
+  const L={brk:{c:'rgba(165,110,255,.85)',lbl:'前高'},cut:{c:'rgba(255,152,0,.85)',lbl:'减仓线'},life:{c:'rgba(242,54,69,.85)',lbl:'生命线'}};
+  ['brk','cut','life'].forEach(k=>{
+    const v=lv[k]; if(!inRange(v))return;
+    ctx.strokeStyle=L[k].c;ctx.setLineDash([5,4]);
+    ctx.beginPath();ctx.moveTo(12,y(v));ctx.lineTo(W-12,y(v));ctx.stroke();ctx.setLineDash([]);
+    ctx.fillStyle=L[k].c;ctx.font='10px sans-serif';
+    const t=L[k].lbl+' '+v.toFixed(3);
+    ctx.fillText(t,W-12-ctx.measureText(t).width-4,y(v)-4);
+  });
+  // 买区
+  if(lv.buy&&inRange(lv.buy[1])&&inRange(lv.buy[0])){
+    ctx.fillStyle='rgba(76,141,255,.12)';
+    ctx.fillRect(12,y(lv.buy[1]),W-24,y(lv.buy[0])-y(lv.buy[1]));
+    ctx.fillStyle='rgba(76,141,255,.6)';ctx.font='10px sans-serif';
+    ctx.fillText('回踩买区 '+lv.buy[0].toFixed(3)+'-'+lv.buy[1].toFixed(3),14,14);
+  }
+  // 网格 + 价格刻度
+  ctx.strokeStyle='#1c2331';ctx.fillStyle='#5a6478';ctx.font='10px sans-serif';
+  for(let g=0;g<=4;g++){
+    const yy=14+(upH-28)*g/4, val=lo+(hi-lo)*g/4;
+    ctx.beginPath();ctx.moveTo(12,yy);ctx.lineTo(W-12,yy);ctx.stroke();
+    ctx.fillText(val.toFixed(3),W-44,yy+3);
+  }
+  // K线
+  const step=(W-24)/bars.length, bw=Math.max(1.2,step*0.6);
+  bars.forEach((b,i)=>{
+    const xc=x(i), bull=b.c>=b.o;
+    const col=bull?'#ef5350':'#26a69a';
+    ctx.strokeStyle=col;ctx.beginPath();ctx.moveTo(xc,y(b.h));ctx.lineTo(xc,y(b.l));ctx.stroke();
+    ctx.fillStyle=col;
+    const top=y(Math.max(b.o,b.c)),bot=y(Math.min(b.o,b.c));
+    ctx.fillRect(xc-bw/2,top,Math.max(1.2,bw),Math.max(1,bot-top));
+    // 成交量
+    ctx.globalAlpha=.7;ctx.fillStyle=col;
+    ctx.fillRect(xc-bw/2,upH+6,Math.max(1.2,bw),(b.v/5)*volH*0.85);ctx.globalAlpha=1;
+  });
+  // 均线:连线
+  lineSeries(ma5,'#f5c04a');lineSeries(ma10,'#4c8dff');lineSeries(ma20,'#a56eff');
+  function lineSeries(arr,color){
+    ctx.strokeStyle=color;ctx.lineWidth=1.1;ctx.beginPath();let pen=false;
+    for(let i=0;i<arr.length;i++){
+      if(arr[i]==null){pen=false;continue}
+      const X=x(i),Y=y(arr[i]);
+      if(!pen){ctx.moveTo(X,Y);pen=true}else ctx.lineTo(X,Y);
+    }
+    ctx.stroke();ctx.lineWidth=1;
+  }
+  // ---- 指标区 ----
+  const iy=upH+volH+6, ih=indH-10;
+  ctx.strokeStyle='#1c2331';ctx.beginPath();ctx.moveTo(12,iy);ctx.lineTo(W-12,iy);ctx.stroke();
+  // MACD
+  ctx.fillStyle='#5a6478';ctx.font='10px sans-serif';ctx.fillText('MACD(12,26,9)',12,iy+12);
+  const mc=macd.macd, mm=Math.max(...mc.map(Math.abs))*1.15||1;
+  const mid=iy+18, mh=ih*0.42;
+  const ym=v=>mid-mc[v]/mm*mh;
+  mc.forEach((m,i)=>{ctx.fillStyle=m>=0?'rgba(239,83,80,.85)':'rgba(38,166,154,.85)';
+    ctx.fillRect(x(i)-bw/2,Math.min(mid,ym(i)),Math.max(1.2,bw),Math.max(1,Math.abs(mid-ym(i))))});
+  lineArr(v=>mid-macd.dif[v]/mm*mh,'#f5c04a');
+  lineArr(v=>mid-macd.dea[v]/mm*mh,'#4c8dff');
+  // KDJ
+  const ktop=iy+ih*0.50, kh=ih*0.46;
+  ctx.fillStyle='#5a6478';ctx.font='10px sans-serif';ctx.fillText('KDJ(9,3,3)',12,ktop+12);
+  ctx.fillStyle='rgba(239,83,80,.12)';ctx.fillRect(12,ktop+14,W-24,(100-85)/100*kh);
+  const clamp=v=>Math.max(0,Math.min(100,v));
+  lineArr(v=>ktop+14+(100-clamp(kdj.K[v]))/100*kh,'#f5c04a');
+  lineArr(v=>ktop+14+(100-clamp(kdj.D[v]))/100*kh,'#4c8dff');
+  lineArr(v=>ktop+14+(100-clamp(kdj.J[v]))/100*kh,'#a56eff');
+  function lineArr(f,color){
+    ctx.strokeStyle=color;ctx.lineWidth=1.1;ctx.beginPath();
+    for(let i=0;i<bars.length;i++){
+      const X=x(i),Y=f(i);
+      if(i===0)ctx.moveTo(X,Y);else ctx.lineTo(X,Y);
+    }
+    ctx.stroke();ctx.lineWidth=1;
+  }
+  // 图例
+  const mk=lv.brk?`<span>前高 <b>${lv.brk}</b></span><span>买区 <b>${lv.buy.join('-')}</b></span><span>减仓线 <b style="color:var(--orange)">${lv.cut}</b></span><span>生命线 <b style="color:var(--red)">${lv.life}</b></span>`:'';
+  document.getElementById('c-markers').innerHTML=
+    `<span>MA5 <b style="color:#f5c04a">${ma5[closes.length-1]?.toFixed(3)||'-'}</b></span>`+
+    `<span>MA10 <b style="color:#4c8dff">${ma10[closes.length-1]?.toFixed(3)||'-'}</b></span>`+
+    `<span>MA20 <b style="color:#a56eff">${ma20[closes.length-1]?.toFixed(3)||'-'}</b></span>`+
+    (lv.brk?`<span>临时观察股 · 无计划,仅行情</span>`:'')+mk;
+}
+function drawMinute(s){
+  const rnd=mulberry32(7+s.code);const N=241;let px=s.base*0.985;
+  const line=[],vol=[];const prevClose=s.base/0.985;
+  for(let i=0;i<N;i++){
+    const t=i/N;const drift=t<0.3?-0.004:t<0.55?-0.001:0.0015;
+    px=px*(1+drift+(rnd()-0.5)*0.0016);
+    line.push(px);vol.push(0.2+rnd()*1.4*(t>0.85?1.6:1));
+  }
+  const lo=Math.min(...line)*0.998,hi=Math.max(...line)*1.002;
+  const x=i=>12+i*(W-24)/N,y=v=>8-(v-hi)/(lo-hi)*(H*0.6-16);
+  ctx.strokeStyle='#1c2331';ctx.beginPath();ctx.moveTo(12,H*0.6);ctx.lineTo(W-12,H*0.6);ctx.stroke();
+  ctx.strokeStyle='#f5c04a';ctx.lineWidth=1.4;ctx.beginPath();
+  line.forEach((v,i)=>{i?ctx.lineTo(x(i),y(v)):ctx.moveTo(x(i),y(v))});ctx.stroke();ctx.lineWidth=1;
+  const avg=line.reduce((a,b)=>a+b,0)/N;
+  ctx.strokeStyle='#4c8dff';ctx.setLineDash([3,3]);ctx.beginPath();ctx.moveTo(12,y(avg));ctx.lineTo(W-12,y(avg));ctx.stroke();ctx.setLineDash([]);
+  const vh=H*0.36;
+  line.forEach((v,i)=>{ctx.fillStyle=v>=prevClose?'rgba(239,83,80,.6)':'rgba(38,166,154,.6)';ctx.fillRect(x(i)-1,H*0.6+8,2,(v/4)*vh*0.8)});
+  ctx.fillStyle='#5a6478';ctx.font='10px sans-serif';
+  ctx.fillText(`现价 ${s.base.toFixed(3)} · 均价 ${avg.toFixed(3)} · 昨日收盘 ${prevClose.toFixed(3)}`,14,20);
+  ctx.strokeStyle='#1c2331';for(let g=1;g<4;g++){ctx.beginPath();ctx.moveTo(12,H*0.6*g/4);ctx.lineTo(W-12,H*0.6*g/4);ctx.stroke()}
+  document.getElementById('c-markers').innerHTML='';
+}
+
+/* ================= tab 切换(盘前/盘中/盘后) ================= */
+function switchTab(k){
+  ['pm','pz','ph'].forEach(t=>{
+    document.getElementById('tab-'+t).classList.toggle('on',t===k);
+    document.getElementById('side-'+t).classList.toggle('on',t===k);
+  });
+  // 退出所有全宽视图(作战地图/回测/模拟盘),恢复常规布局
+  Object.keys(VIEWS).forEach(v=>{
+    document.getElementById(VIEWS[v]).classList.remove('on');
+    document.getElementById('btn-'+v).classList.remove('on');
+  });
+  document.getElementById('idx-strip').style.display='';
+  document.getElementById('left-col').style.display='';
+}
+document.getElementById('tab-pm').onclick=()=>switchTab('pm');
+document.getElementById('tab-pz').onclick=()=>switchTab('pz');
+document.getElementById('tab-ph').onclick=()=>switchTab('ph');
+
+/* ================= 独立全宽视图(作战地图/回测/模拟盘,顶栏右侧按钮) ================= */
+const VIEWS={map:'map-view',backtest:'backtest-view',sim:'sim-view'};
+function openView(name){
+  const on=!document.getElementById(VIEWS[name]).classList.contains('on');
+  // 关闭所有全宽视图 + 对应按钮
+  Object.keys(VIEWS).forEach(k=>{
+    document.getElementById(VIEWS[k]).classList.remove('on');
+    document.getElementById('btn-'+k).classList.remove('on');
+  });
+  if(!on)return; // 再次点击当前视图按钮 = 关闭,恢复常规布局
+  document.getElementById(VIEWS[name]).classList.add('on');
+  document.getElementById('btn-'+name).classList.add('on');
+  // 全宽视图:隐藏指数条 + 左侧图表区 + 三个 side 面板
+  document.getElementById('idx-strip').style.display='none';
+  document.getElementById('left-col').style.display='none';
+  ['pm','pz','ph'].forEach(t=>{
+    document.getElementById('side-'+t).classList.remove('on');
+    document.getElementById('tab-'+t).classList.remove('on');
+  });
+}
+document.getElementById('btn-map').onclick=()=>openView('map');
+document.getElementById('btn-backtest').onclick=()=>openView('backtest');
+document.getElementById('btn-sim').onclick=()=>openView('sim');
+
+/* 回测演示(原型示意数据) */
+function runBacktest(){
+  const ret=document.getElementById('bt-ret'),mdd=document.getElementById('bt-mdd'),
+        bh=document.getElementById('bt-bh'),alpha=document.getElementById('bt-alpha');
+  ret.textContent='+18.4%';ret.className='v up';document.getElementById('bt-ret-s').textContent='2026-01-05 ~ 08-19';
+  mdd.textContent='-11.2%';mdd.className='v down';
+  bh.textContent='+9.7%';bh.className='v';
+  alpha.textContent='+8.7%';alpha.className='v up';
+  document.getElementById('bt-chart').innerHTML='<canvas style="width:100%;height:100%"></canvas><span class="dim">示意:规则净值(蓝) vs 买入持有(灰)</span>';
+  const trades=document.getElementById('bt-trades');
+  trades.innerHTML=[
+    ['2026-02-03','化工 516020','加仓①','0.858','2000','—','回踩 0.855-0.860 缩量企稳'],
+    ['2026-03-10','半导体 159516','加仓①','0.735','1500','—','回踩 0.72-0.75 企稳'],
+    ['2026-04-15','电网 159326','加仓②','1.882','600','—','放量突破 1.872 站稳2日'],
+    ['2026-05-22','通信 515050','减仓红线','1.010','-500','-3.1%','放量跌破 1.01'],
+    ['2026-06-18','光伏 515790','换仓','0.935','-700','+2.4%','反弹至 0.92-0.94'],
+    ['2026-07-30','电池 159796','加仓①','0.858','1200','—','回踩 0.855-0.865 企稳'],
+  ].map(r=>`<tr><td>${r[0]}</td><td>${r[1]}</td><td><span class="pos-tag ${r[2].includes('减')||r[2].includes('换')?'pos-sell':'pos-buy'}">${r[2]}</span></td><td>${r[3]}</td><td>${r[4]}</td><td>${r[5]}</td><td class="dim">${r[6]}</td></tr>`).join('');
+  document.getElementById('bt-concl').innerHTML=
+    '<b>结论(示意):</b>作战地图规则在区间内 <b class="up">+18.4%</b>,跑赢买入持有(+9.7%),超额 +8.7%。<br>'+
+    '最大回撤 -11.2%,低于买入持有的 -16.4%(规则止损/减仓红线降低了回撤)。<br>'+
+    '<span class="dim">主要贡献:化工/半导体回踩加仓 + 通信/光伏红线减仓(规避了 5 月与 7 月两段下跌)。本页测规则骨架,不含信息层。</span>';
+}
+
+/* 模拟盘演示(原型示意数据) */
+function startSim(){
+  document.getElementById('sm-total').textContent='¥17,510';document.getElementById('sm-total').className='v up';
+  document.getElementById('sm-cash').textContent='¥8,120';document.getElementById('sm-cash').className='v';
+  document.getElementById('sm-ret').textContent='+1.2%';document.getElementById('sm-ret').className='v up';
+  document.getElementById('sm-mdd').textContent='-0.6%';document.getElementById('sm-mdd').className='v down';
+  document.getElementById('sm-today').textContent='+0.3%';document.getElementById('sm-today').className='v up';
+  document.getElementById('sm-chart').innerHTML='<canvas style="width:100%;height:100%"></canvas><span class="dim">示意:账户净值逐日累计(自 08-20)</span>';
+  document.getElementById('sm-info-chart').innerHTML='<canvas style="width:100%;height:100%"></canvas><span class="dim">示意:催化判定准确率(柱) + 信息层 alpha 累计(线)</span>';
+  document.getElementById('sm-info-n').textContent='12';
+  document.getElementById('sm-info-acc').textContent='75%';document.getElementById('sm-info-acc').className='v up';
+  document.getElementById('sm-info-alpha').textContent='+2.1%';document.getElementById('sm-info-alpha').className='v up';
+  document.getElementById('sm-pos').innerHTML=[
+    ['化工 516020','2000','0.879','0.876','1752','-0.3%','pos-hold','持有'],
+    ['半导体 159516','500','1.825','0.772','386','-57.7%','pos-hold','持有'],
+    ['电池 159796','1800','1.171','0.884','1591','-24.5%','pos-hold','持有'],
+    ['电网 159326','600','2.606','1.700','1020','-34.8%','pos-hold','持有'],
+    ['光伏 515790','800','1.252','0.864','691','-31.0%','pos-hold','持有'],
+    ['通信 515050','600','1.616','1.062','637','-34.3%','pos-hold','持有'],
+    ['黄金 518850','100','10.015','9.086','909','-9.3%','pos-hold','持有'],
+  ].map(p=>`<tr><td class="sym">${p[0]}</td><td>${p[1]}</td><td>${p[2]}</td><td>${p[3]}</td><td>${p[4]}</td><td class="${p[5][0]==='-'?'down':'up'}">${p[5]}</td><td><span class="pos-tag ${p[6]}">${p[7]}</span></td></tr>`).join('');
+  document.getElementById('sm-flow').innerHTML=[
+    ['2026-08-20','—','开仓','—','—','读作战地图 §二 持仓表建仓'],
+    ['2026-08-21','化工 516020','加仓①','0.858','2000','回踩 0.855-0.860 缩量企稳'],
+    ['2026-08-22','通信 515050','减仓红线','1.010','-500','放量跌破 1.01'],
+  ].map(r=>`<tr><td>${r[0]}</td><td>${r[1]}</td><td><span class="pos-tag ${r[2].includes('减')?'pos-sell':'pos-buy'}">${r[2]}</span></td><td>${r[3]}</td><td>${r[4]}</td><td class="dim">${r[5]}</td></tr>`).join('');
+  document.getElementById('sm-levels').innerHTML=SYMS.map(s=>{
+    const lv=s.levels;if(!lv)return '';
+    const near=Math.abs((s.base-lv.cut)/lv.cut*100).toFixed(1);
+    return `<tr><td class="sym">${s.name}</td><td>${s.base.toFixed(3)}</td><td>${lv.buy.join('-')}</td><td>${lv.brk}</td><td>${lv.cut}</td><td>${lv.life}</td><td class="dim">距减仓线 ${near}%</td></tr>`;
+  }).join('');
+}
+
+function genShot(){
+  const b=document.getElementById('shot-box');
+  b.style.display='block';
+  b.innerHTML=`<b>10:03 —— 大盘继续破位,跌势加深,防守升级</b><br>
+<b class="risk">## 大盘:3940.54(-1.25%)</b><br>
+低开 3952 → 跌破 3948/3955 全部短线支撑,现最低 3937.67,<b>直奔 3888(MA60)</b>。没有昨日午后护盘迹象,越走越弱。<br><br>
+<b>判断:今天不加仓,理由更硬了</b><br>
+1. 大盘破位加深(3974→3948→3937 三级台阶),"防守模式"升级为"等企稳"<br>
+2. 半导体虽接近 0.72-0.75,但两个条件一个都不满足:<b class="warn">大盘没守 3974 ✗ + 价格没缩量企稳 ✗ —— 缺一不买</b><br>
+3. 化工逆势放量是唯一火种,但破位日逆势突破成功率低——别追,等大盘先企稳<br><br>
+<b>现在到午盘只看一件事:大盘能否在 3942 站住</b><br>
+· 站住 + 午后回升 → 下午恢复"等回踩加仓"节奏<br>
+· 站不住 → 看 3888,唯一任务守住不亏,买入推迟到明天<br><br>
+<b class="warn">纪律:破位日,空仓比抄底金贵。</b>`;
+}
+
+/* ================= 搜索添加自选股 ================= */
+const STOCK_DB=[
+  {code:"300750",name:"宁德时代",base:182.5}, {code:"600519",name:"贵州茅台",base:1436.0},
+  {code:"300059",name:"东方财富",base:22.4}, {code:"601318",name:"中国平安",base:54.8},
+  {code:"512880",name:"证券ETF",base:1.12}, {code:"510300",name:"沪深300ETF",base:4.05},
+  {code:"159928",name:"消费ETF",base:0.92}, {code:"512480",name:"半导体ETF",base:1.38},
+];
+function openSearch(){
+  document.getElementById('modal-search').classList.add('on');
+  document.getElementById('sr-q').value='';document.getElementById('sr-res').innerHTML='';
+  setTimeout(()=>document.getElementById('sr-q').focus(),50);
+}
+function closeSearch(){document.getElementById('modal-search').classList.remove('on')}
+document.getElementById('modal-search').onclick=e=>{if(e.target.id==='modal-search')closeSearch()};
+function doSearch(){
+  const q=(document.getElementById('sr-q').value||'').trim().toLowerCase();
+  const res=STOCK_DB.filter(s=>s.code.startsWith(q)||s.name.toLowerCase().includes(q));
+  const box=document.getElementById('sr-res');
+  if(!res.length){box.innerHTML='<div class="sr-none">未找到,试试其他代码/名称(演示用内置股票库)</div>';return}
+  box.innerHTML=res.map(s=>{
+    const added=SYMS.some(x=>x.code===s.code);
+    return `<div class="sr-row">
+      <span class="nm">${s.name}</span><span class="dim">${s.code}</span>
+      <span class="px">${s.base.toFixed(2)}</span>
+      <button ${added?'disabled':''} onclick="addStock('${s.code}')">${added?'已添加':'添加'}</button></div>`}).join('');
+}
+function addStock(code){
+  const s=STOCK_DB.find(x=>x.code===code); if(!s||SYMS.some(x=>x.code===code))return;
+  const rnd=mulberry32(9000+s.code*1);
+  SYMS.push({name:s.name,code:s.code,base:+(s.base*(1+(rnd()-0.5)*0.03)).toFixed(3),chg:(rnd()-0.5>0?'+':'-')+Math.abs(rnd()*3).toFixed(2)+'%',vr:+(0.6+rnd()*2.5).toFixed(2),vol:rnd()>0.6?'放量':'平量',volc:rnd()>0.6?'v-hi':'v-mid',st:'noplan',stt:'无计划',tag:'t-normal',chain:'临时观察股,仅行情',levels:null});
+  closeSearch();renderWL();renderFloat();pick(SYMS.length-1);
+}
+
+renderWL();renderFloat();renderPos();renderQuick();renderDocAnas();renderChart();
+window.addEventListener('resize',renderChart);
+</script>
+</body>
+</html>

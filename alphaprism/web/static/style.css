@@ -1,0 +1,121 @@
+/* AlphaPrism 行情页(里程碑6)· 深色主题,与原型 mockup.html 一致的设计令牌 */
+:root{
+  --bg:#0b0e14; --panel:#131722; --panel2:#1a2030; --line:#232a38;
+  --text:#d1d4dc; --dim:#787b86; --red:#f23645; --green:#089981;
+  --yellow:#e8b339; --orange:#ff9800; --purple:#a56eff; --blue:#4c8dff;
+}
+*{margin:0;padding:0;box-sizing:border-box}
+body{background:var(--bg);color:var(--text);font-family:"Microsoft YaHei",-apple-system,sans-serif;font-size:13px;overflow-x:hidden}
+.up{color:var(--red)} .down{color:var(--green)} .flat{color:var(--dim)}
+.dim{color:var(--dim)}
+.tag{display:inline-block;padding:0 6px;border-radius:3px;font-size:11px;line-height:16px}
+.t-normal{background:#1f2633;color:#8a93a6}
+.t-near{background:#3a2f14;color:var(--yellow)}
+.t-hit{background:#4a1520;color:var(--red)}
+.t-warn{background:#3a1a10;color:var(--orange)}
+.t-hot{background:#2a1440;color:var(--purple)}
+.t-ok{background:#0f332b;color:var(--green)}
+
+/* ===== header ===== */
+header{display:flex;align-items:center;gap:16px;padding:8px 16px;background:var(--panel);border-bottom:1px solid var(--line);position:sticky;top:0;z-index:50}
+.logo{font-weight:700;font-size:15px;color:#fff;letter-spacing:1px}
+.logo span{color:var(--blue)}
+nav{display:flex;gap:4px;flex:1}
+nav button{background:none;border:1px solid transparent;color:var(--dim);padding:6px 16px;border-radius:6px;cursor:pointer;font-size:13px}
+nav button:hover{color:#fff}
+nav button.on{background:#1b2333;color:#fff;border-color:var(--line)}
+nav button.on::before{content:"";display:inline-block;width:6px;height:6px;border-radius:50%;background:var(--blue);margin-right:6px;vertical-align:1px}
+.hdr-actions{display:flex;gap:4px;margin-left:auto}
+.hdr-actions button{background:none;border:1px solid transparent;color:var(--dim);padding:6px 16px;border-radius:6px;cursor:pointer;font-size:13px}
+.hdr-actions button:hover{color:#fff}
+.hdr-actions button.on{background:#1b2333;color:#fff;border-color:var(--line)}
+.hdr-actions button.on::before{content:"";display:inline-block;width:6px;height:6px;border-radius:50%;background:var(--blue);margin-right:6px;vertical-align:1px}
+
+/* ===== index strip ===== */
+.idx-strip{display:flex;gap:10px;padding:10px 16px;background:var(--panel);border-bottom:1px solid var(--line)}
+.idx{flex:1;background:var(--panel2);border:1px solid var(--line);border-radius:8px;padding:8px 12px;display:flex;flex-direction:column;gap:3px}
+.idx .n{color:var(--dim);font-size:12px;display:flex;justify-content:space-between}
+.idx .v{font-size:17px;font-weight:700}
+.idx .s{font-size:12px;display:flex;gap:10px}
+.idx.danger{border-color:#5c1a22;background:#17101a}
+
+/* ===== main layout ===== */
+main{display:flex;padding:10px 16px;gap:10px;align-items:flex-start}
+.left{flex:1.45;display:flex;flex-direction:column;gap:10px;min-width:0}
+.right{flex:1;display:flex;flex-direction:column;gap:10px;min-width:0}
+.card{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:12px}
+.card h3{font-size:13px;color:#fff;font-weight:600;margin-bottom:8px;display:flex;align-items:center;gap:8px}
+.card h3 .dim{font-weight:400}
+.add-btn{margin-left:auto;background:#1b2333;border:1px solid var(--line);color:var(--blue);border-radius:6px;padding:3px 10px;cursor:pointer;font-size:12px}
+.add-btn:hover{background:#22304a}
+
+/* ===== tables ===== */
+table{width:100%;border-collapse:collapse;font-size:12px}
+th{color:var(--dim);font-weight:400;text-align:left;padding:5px 6px;border-bottom:1px solid var(--line);white-space:nowrap}
+td{padding:6px;border-bottom:1px solid #1b2130;white-space:nowrap}
+tr:last-child td{border-bottom:none}
+tbody tr{cursor:default}
+tbody tr.selectable{cursor:pointer}
+tbody tr.selectable:hover{background:#161c2b}
+tbody tr.sel{background:#1b2333}
+td .px{font-weight:600}
+td .nm{color:#fff}
+
+/* ===== chart ===== */
+.chart-head{display:flex;align-items:center;gap:8px;margin-bottom:8px}
+.tabs2{display:flex;gap:4px}
+.tabs2 button{background:none;border:1px solid transparent;color:var(--dim);padding:4px 12px;border-radius:6px;cursor:pointer;font-size:12px}
+.tabs2 button.on{background:#1b2333;color:#fff;border-color:var(--line)}
+.sym{margin-left:auto;color:#fff;font-weight:600}
+.px{font-weight:600}
+.cwrap{height:360px;width:100%}
+.cwrap.short{height:300px}
+
+/* ===== 侧栏 tab 切换 ===== */
+.side{display:none}
+.side.on{display:block}
+.gate-bar{display:flex;align-items:center;gap:8px;padding:6px 8px;background:var(--panel2);border:1px solid var(--line);border-radius:6px;margin-bottom:4px}
+
+/* ===== 消息/剧本/纪律 ===== */
+.nw{padding:6px 8px;border-radius:6px;margin-bottom:6px;font-size:12px;line-height:1.5}
+.nw.bad{background:#1a1113;border:1px solid #3a1a22}
+.nw.mid{background:#161c1c;border:1px solid #25302c}
+.nw.good{background:#0f1c16;border:1px solid #1a3a2a}
+table.mk td{white-space:normal;vertical-align:top}
+ul.disc{padding-left:18px;font-size:12px;line-height:1.7}
+ul.disc li{margin-bottom:4px}
+
+/* ===== 按钮 ===== */
+.btn{background:#1b2333;border:1px solid var(--line);color:#fff;border-radius:6px;padding:7px 14px;cursor:pointer;font-size:13px;margin-top:8px}
+.btn:hover{background:#22304a}
+.btn.primary{background:#1d3a5f;border-color:#2a4a7a}
+
+/* ===== 快照输出 ===== */
+.shot{background:var(--panel2);border:1px solid var(--line);border-radius:8px;padding:10px;margin-top:8px;font-size:12px;line-height:1.7;white-space:pre-wrap}
+
+/* ===== 全宽视图(作战地图/回测) ===== */
+.fullview{display:none;padding:12px 16px}
+.fullview.on{display:block}
+.mv-head h3{font-size:16px;color:#fff;margin-bottom:4px}
+.mv-sub{color:var(--dim);font-size:12px;margin-bottom:10px}
+details{background:var(--panel);border:1px solid var(--line);border-radius:8px;margin-bottom:8px;padding:10px 12px}
+summary{cursor:pointer;color:#fff;font-weight:600;font-size:13px}
+details .body{margin-top:8px;font-size:12px;line-height:1.7}
+details pre{white-space:pre-wrap;background:var(--panel2);border-radius:6px;padding:8px;font-family:inherit}
+
+/* ===== 回测 ===== */
+.bt-params{display:flex;gap:10px;align-items:flex-end;flex-wrap:wrap;margin-bottom:10px}
+.p-field{display:flex;flex-direction:column;gap:4px}
+.p-field label{color:var(--dim);font-size:11px}
+.p-field input,.p-field select{background:#0f1420;border:1px solid var(--line);color:#fff;border-radius:6px;padding:6px 8px;font-size:12px}
+.metrics{display:flex;gap:10px;flex-wrap:wrap;margin-bottom:10px}
+.metric{flex:1;min-width:120px;background:var(--panel2);border:1px solid var(--line);border-radius:8px;padding:10px 12px}
+.metric .k{color:var(--dim);font-size:11px}
+.metric .v{font-size:20px;font-weight:700;margin:2px 0}
+.metric .s{color:var(--dim);font-size:11px}
+.chart-canvas{height:260px;width:100%;background:var(--panel2);border:1px solid var(--line);border-radius:8px;margin-bottom:10px}
+
+/* ===== 加载/错误 ===== */
+.loading{color:var(--dim);padding:20px;text-align:center}
+.error{color:var(--red);padding:10px}
+.badge{font-size:11px;color:var(--dim)}
