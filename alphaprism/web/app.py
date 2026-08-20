@@ -169,7 +169,8 @@ def create_app() -> Flask:
             if period == "m30":
                 df = fetch_30m(sym, count=160)
                 rows = [{"t": str(r.ts), "o": r.open, "h": r.high,
-                         "l": r.low, "c": r.close, "v": r.volume}
+                         "l": r.low, "c": r.close, "v": r.volume,
+                         "am": getattr(r, "amount", None)}
                         for r in df.itertuples()]
                 return jsonify({"ok": True, "period": period, "rows": rows})
             if period == "min":
@@ -182,7 +183,8 @@ def create_app() -> Flask:
             # 日K(近 300 根)
             df = fetch_daily(sym, "2024-01-01", "2030-12-31").tail(300)
             rows = [{"t": str(r.trade_date), "o": r.open, "h": r.high,
-                     "l": r.low, "c": r.close, "v": r.volume}
+                     "l": r.low, "c": r.close, "v": r.volume,
+                     "am": getattr(r, "amount", None), "tr": getattr(r, "turnover", None)}
                     for r in df.itertuples()]
             return jsonify({"ok": True, "period": "day", "rows": rows})
         except Exception as exc:  # noqa: BLE001

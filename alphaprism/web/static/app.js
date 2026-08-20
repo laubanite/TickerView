@@ -49,6 +49,7 @@ const app = createApp({
       snapError: "",
       snapLoading: false,
       snapPushing: false,
+      dayRows: [],      // 当前标的日K rows(供量比/均量/叠线计算)
     };
   },
 
@@ -96,6 +97,26 @@ const app = createApp({
       ln("减仓红线", "#ff9f6e", "solid");
       ln("生命线", "#ff5c6c", "solid");
       return out;
+    },
+    quoteMetrics() {
+      // 行情指标条:实时快照 + 日K 量能(量比/MA5量/MA10量)
+      const q = this.currentQuote || {};
+      const vol = this.dayRows.map((r) => r.v || 0);
+      const n = vol.length;
+      const avg = (arr) => (arr.length ? arr.reduce((a, b) => a + b, 0) / arr.length : null);
+      const lastVol = n ? vol[n - 1] : null;
+      const avg5prev = n >= 6 ? avg(vol.slice(-6, -1)) : n > 1 ? avg(vol.slice(0, -1)) : null;
+      const volRatio = lastVol != null && avg5prev ? lastVol / avg5prev : null;
+      return {
+        price: q.last_price, chg: q.price_change_ratio_pct,
+        open: q.open_price, high: q.high_price, low: q.low_price,
+        volume: q.volume != null ? q.volume / 100 : null,   // 股→手
+        amount: q.turnover,
+        turnover: q.turnover_ratio_pct,
+        volRatio,
+        ma5v: n >= 5 ? avg(vol.slice(-5)) : null,
+        ma10v: n >= 10 ? avg(vol.slice(-10)) : null,
+      };
     },
   },
 
@@ -233,7 +254,83 @@ const app = createApp({
       if (!this.current) return;
       const r = await api(`/api/kline?symbol=${this.current}&period=${this.period}`);
       if (!r.ok) { this.msg = r.error || "K线加载失败"; return; }
+      if (r.period === "day") this.dayRows = r.rows || [];
       this.renderChart(r);
+    },
+
+    // ---- 格式化 ----
+    fmtVol(v) {
+      if (v == null || isNaN(v)) return "-";
+      if (v >= 1e8) return (v / 1e8).toFixed(2) + "亿";
+      if (v >= 1e4) return (v / 1e4).toFixed(1) + "万";
+      return String(Math.round(v));
+    },
+    fmtAmt(v) {
+      if (v == null || isNaN(v)) return "-";
+      if (v >= 1e8) return (v / 1e8).toFixed(2) + "亿";
+      if (v >= 1e4) return (v / 1e4).toFixed(1) + "万";
+      return String(Math.round(v));
+    },
+    ma(arr, n) {
+      // 移动平均;前 n-1 位为 null
+      return arr.map((_, i) => {
+        if (i < n - 1) return null;
+        let s = 0;
+        for (let j = i - n + 1; j <= i; j++) s += arr[j];
+        return +(s / n).toFixed(4);
+      });
+    },
+    maColor(p) {
+      return { 5: "#f0b90b", 10: "#4c8dff", 20: "#a56eff", 60: "#ff9800", 120: "#26c6da", 250: "#9e9e9e" }[p] || "#4c8dff";
+    },
+
+    // ---- markdown 渲染(轻量:表/标题/粗斜体/列表/引用/链接,先转义防注入) ----
+    mdToHtml(md) {
+      if (!md) return "";
+      const esc = (s) => s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+      const inline = (s) => s
+        .replace(/\*\*([^*]+)\*\*/g, "<b>$1</b>")
+        .replace(/\*([^*]+)\*/g, "<i>$1</i>")
+        .replace(/`([^`]+)`/g, "<code>$1</code>")
+        .replace(/\[([^\]]+)\]\(([^)]+)\)/g, '<a href="$2" target="_blank" rel="noopener">$1</a>');
+      const lines = esc(md).split(/\r?\n/);
+      let html = "";
+      let inList = false, listType = "ul", tableRows = [];
+      const flushTable = () => {
+        if (!tableRows.length) return;
+        html += "<table class='mk'>" + tableRows.map((r, i) => {
+          const tag = i === 0 ? "th" : "td";
+          return "<tr>" + r.map((c) => `<${tag}>${c}</${tag}>`).join("") + "</tr>";
+        }).join("") + "</table>";
+        tableRows = [];
+      };
+      const flushList = () => { if (inList) { html += `</${listType}>`; inList = false; } };
+      for (const raw of lines) {
+        const s = raw.trim();
+        if (!s) { flushTable(); flushList(); continue; }
+        if (s.startsWith("|") && s.endsWith("|")) {
+          const cells = s.replace(/^\||\|$/g, "").split("|").map((c) => inline(c.trim()));
+          if (cells.every((c) => /^:?-+:?$/.test(c))) continue;   // 分隔行
+          tableRows.push(cells);
+          continue;
+        } else if (tableRows.length) { flushTable(); }
+        flushList();
+        const hm = s.match(/^(#{1,6})\s+(.*)$/);
+        if (hm) { html += `<h${hm[1].length}>${inline(hm[2])}</h${hm[1].length}>`; continue; }
+        if (s.startsWith(">")) { html += `<blockquote>${inline(s.replace(/^>\s?/, ""))}</blockquote>`; continue; }
+        if (/^[-*_]{3,}$/.test(s)) { html += "<hr>"; continue; }
+        const um = s.match(/^[-*]\s+(.*)$/);
+        const om = s.match(/^\d+[.)]\s+(.*)$/);
+        if (um || om) {
+          const type = om ? "ol" : "ul";
+          if (!inList || listType !== type) { flushList(); html += `<${type}>`; inList = true; listType = type; }
+          html += `<li>${inline((um || om)[1])}</li>`;
+          continue;
+        }
+        html += `<p>${inline(s)}</p>`;
+      }
+      flushTable(); flushList();
+      return html;
     },
 
     // ---- 图表 ----
@@ -244,39 +341,89 @@ const app = createApp({
     renderChart(r) {
       if (!this.chart) this.initChart();
       const rows = r.rows || [];
-      const isMin = r.period === "min";
-      const x = rows.map((x) => x.t);
-      const price = rows.map((x) => (isMin ? x.p : x.c));
-      const vol = rows.map((x) => (isMin ? x.v : x.v));
-      const color = (arr) =>
-        arr.map((v, i) => (i > 0 && v < arr[i - 1] ? "#089981" : "#f23645"));
+      if (r.period === "min") return this.renderMinute(r, rows);
 
+      // ---- 日K / 30分K: 蜡烛图 + 均线 + 成交量(MA5/MA10量) ----
+      const x = rows.map((x) => x.t);
+      const kData = rows.map((x) => [x.o, x.c, x.l, x.h]);
+      const vol = rows.map((x) => x.v || 0);
+      const isDay = r.period === "day";
+      const maPeriods = isDay ? [5, 10, 20, 60, 120, 250] : [5, 10, 20, 60];
+      const closeArr = rows.map((x) => x.c);
+      const maSeries = maPeriods.map((p) => ({
+        name: "MA" + p, type: "line", data: this.ma(closeArr, p), smooth: true,
+        showSymbol: false, xAxisIndex: 0, yAxisIndex: 0,
+        lineStyle: { width: 1, type: p >= 120 ? "dashed" : "solid", color: this.maColor(p) },
+        itemStyle: { color: this.maColor(p) }, emphasis: { disabled: true }, z: 3,
+      }));
+      const legend = maPeriods.map((p) => "MA" + p);
       const option = {
-        backgroundColor: "transparent",
-        animation: false,
+        backgroundColor: "transparent", animation: false,
         tooltip: { trigger: "axis", axisPointer: { type: "cross" } },
+        legend: { data: legend, top: 0, left: 0, textStyle: { color: "#787b86", fontSize: 10 }, itemWidth: 12, itemHeight: 8, itemGap: 6 },
         axisPointer: { link: [{ xAxisIndex: "all" }] },
         grid: [
-          { left: 50, right: 16, top: 12, height: "58%" },
-          { left: 50, right: 16, top: "76%", height: "14%" },
+          { left: 58, right: 18, top: 22, height: "52%" },
+          { left: 58, right: 18, top: "78%", height: "15%" },
         ],
         xAxis: [
-          { type: "category", data: x, gridIndex: 0, axisLine: { lineStyle: { color: "#232a38" } }, axisLabel: { color: "#787b86" } },
+          { type: "category", data: x, gridIndex: 0, axisLine: { lineStyle: { color: "#232a38" } }, axisLabel: { color: "#787b86", fontSize: 10 } },
           { type: "category", data: x, gridIndex: 1, axisLine: { lineStyle: { color: "#232a38" } }, axisLabel: { show: false } },
         ],
         yAxis: [
-          { scale: true, gridIndex: 0, axisLabel: { color: "#787b86" }, splitLine: { lineStyle: { color: "#1b2130" } } },
-          { gridIndex: 1, axisLabel: { color: "#787b86" }, splitLine: { show: false } },
+          { scale: true, gridIndex: 0, axisLabel: { color: "#787b86", fontSize: 10 }, splitLine: { lineStyle: { color: "#1b2130" } } },
+          { gridIndex: 1, axisLabel: { color: "#787b86", fontSize: 10, formatter: (v) => this.fmtVol(v) }, splitLine: { show: false } },
+        ],
+        dataZoom: [
+          { type: "inside", xAxisIndex: [0, 1], start: 55, end: 100 },
+          { type: "slider", xAxisIndex: [0, 1], bottom: 0, height: 14, borderColor: "#232a38", fillerColor: "rgba(76,141,255,0.1)" },
+        ],
+        series: [
+          { name: "K线", type: "candlestick", data: kData, xAxisIndex: 0, yAxisIndex: 0,
+            itemStyle: { color: "#f23645", color0: "#089981", borderColor: "#f23645", borderColor0: "#089981" },
+            markLine: this.levelMarkLine(), z: 2 },
+          ...maSeries,
+          { name: "成交量", type: "bar", data: vol, xAxisIndex: 1, yAxisIndex: 1,
+            itemStyle: { color: (p) => (p.dataIndex > 0 && rows[p.dataIndex].c < rows[p.dataIndex - 1].c ? "#089981" : "#f23645") } },
+          { name: "MA5量", type: "line", data: this.ma(vol, 5), xAxisIndex: 1, yAxisIndex: 1,
+            showSymbol: false, lineStyle: { width: 1, color: "#f0b90b" }, z: 3 },
+          { name: "MA10量", type: "line", data: this.ma(vol, 10), xAxisIndex: 1, yAxisIndex: 1,
+            showSymbol: false, lineStyle: { width: 1, color: "#4c8dff" }, z: 3 },
+        ],
+      };
+      try {
+        this.chart.setOption(option, true);
+      } catch (e) {
+        this.msg = "图表渲染错误: " + e;
+      }
+    },
+    renderMinute(r, rows) {
+      const price = rows.map((x) => x.p);
+      const vol = rows.map((x) => x.v);
+      const option = {
+        backgroundColor: "transparent", animation: false,
+        tooltip: { trigger: "axis", axisPointer: { type: "cross" } },
+        axisPointer: { link: [{ xAxisIndex: "all" }] },
+        grid: [
+          { left: 58, right: 18, top: 22, height: "58%" },
+          { left: 58, right: 18, top: "82%", height: "14%" },
+        ],
+        xAxis: [
+          { type: "category", data: x, gridIndex: 0, axisLine: { lineStyle: { color: "#232a38" } }, axisLabel: { color: "#787b86", fontSize: 10 } },
+          { type: "category", data: x, gridIndex: 1, axisLine: { lineStyle: { color: "#232a38" } }, axisLabel: { show: false } },
+        ],
+        yAxis: [
+          { scale: true, gridIndex: 0, axisLabel: { color: "#787b86", fontSize: 10 }, splitLine: { lineStyle: { color: "#1b2130" } } },
+          { gridIndex: 1, axisLabel: { color: "#787b86", fontSize: 10, formatter: (v) => this.fmtVol(v) }, splitLine: { show: false } },
         ],
         dataZoom: [
           { type: "inside", xAxisIndex: [0, 1], start: 0, end: 100 },
-          { type: "slider", xAxisIndex: [0, 1], bottom: 0, height: 16, borderColor: "#232a38", fillerColor: "rgba(76,141,255,0.1)" },
+          { type: "slider", xAxisIndex: [0, 1], bottom: 0, height: 14, borderColor: "#232a38", fillerColor: "rgba(76,141,255,0.1)" },
         ],
         series: [
           { name: "价格", type: "line", data: price, xAxisIndex: 0, yAxisIndex: 0,
             showSymbol: false, lineStyle: { width: 1.5, color: "#4c8dff" },
-            itemStyle: { color: "#4c8dff" },
-            markLine: r.period === "min" ? this.minAvgLine(r) : this.levelMarkLine() },
+            itemStyle: { color: "#4c8dff" }, markLine: this.minAvgLine(r) },
           { name: "成交量", type: "bar", data: vol, xAxisIndex: 1, yAxisIndex: 1,
             itemStyle: { color: (p) => (p.dataIndex > 0 && price[p.dataIndex] < price[p.dataIndex - 1] ? "#089981" : "#f23645") } },
         ],

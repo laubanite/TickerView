@@ -634,7 +634,8 @@ def cmd_check(args) -> int:
     g = r["gate"]
     gate_state = "开放(可加仓)" if g["open"] else "关闭(不加仓)"
     j = f"{g['j']}" if g["j"] is not None else "-"
-    print(f"大盘门控: {gate_state}  J={j}  规则[{g['rule']}]")
+    j_date = g.get("date") or ""
+    print(f"大盘门控: {gate_state}  J={j}(截至 {j_date} 收盘)  规则[{g['rule']}]")
     print(f"  命中动作: {g['action'] or '-'}")
     if not g["open"]:
         print("  ⚠️ 大盘破位/超卖 → 所有'接近买点'降级'等待·缺条件'(§5.1 大盘灯联动)")

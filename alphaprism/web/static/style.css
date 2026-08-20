@@ -68,7 +68,13 @@ td .nm{color:#fff}
 .tabs2 button.on{background:#1b2333;color:#fff;border-color:var(--line)}
 .sym{margin-left:auto;color:#fff;font-weight:600}
 .px{font-weight:600}
-.cwrap{height:360px;width:100%}
+
+/* ===== 行情指标条 ===== */
+.qmetrics{display:flex;flex-wrap:wrap;gap:4px 14px;padding:6px 2px 8px;border-bottom:1px solid #1b2130;margin-bottom:8px;font-size:12px;color:var(--dim)}
+.qmetrics b{color:#fff;font-weight:600}
+
+/* ===== 图表 ===== */
+.cwrap{height:430px;width:100%}
 .cwrap.short{height:300px}
 
 /* ===== 侧栏 tab 切换 ===== */
@@ -92,8 +98,18 @@ ul.disc li{margin-bottom:4px}
 .btn.mini{padding:0 6px;margin:0;font-size:11px;color:var(--dim)}
 .btn.mini:hover{color:var(--red)}
 
-/* ===== 快照输出 ===== */
-.shot{background:var(--panel2);border:1px solid var(--line);border-radius:8px;padding:10px;margin-top:8px;font-size:12px;line-height:1.7;white-space:pre-wrap}
+/* ===== 快照输出(markdown 渲染后) ===== */
+.shot{background:var(--panel2);border:1px solid var(--line);border-radius:8px;padding:10px;margin-top:8px;font-size:12px;line-height:1.7;overflow-x:auto}
+.shot p{margin:4px 0}
+.shot h3,.shot h4{color:#fff;margin:10px 0 4px;font-size:13px}
+.shot ul,.shot ol{padding-left:18px;margin:4px 0}
+.shot li{margin:2px 0}
+.shot blockquote{border-left:3px solid var(--blue);background:#10141e;padding:4px 8px;margin:6px 0;border-radius:0 4px 4px 0;color:#c6cbd6}
+.shot hr{border:none;border-top:1px solid var(--line);margin:8px 0}
+.shot table{margin:6px 0}
+.shot th{color:var(--dim);font-weight:400;text-align:left;padding:4px 6px;border-bottom:1px solid var(--line)}
+.shot td{padding:4px 6px;border-bottom:1px solid #1b2130;white-space:normal;vertical-align:top}
+.shot code{background:#0c0f16;border:1px solid var(--line);border-radius:3px;padding:0 3px;font-size:11px}
 
 /* ===== 全宽视图(作战地图/回测) ===== */
 .fullview{display:none;padding:12px 16px}

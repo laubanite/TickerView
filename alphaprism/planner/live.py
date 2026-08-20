@@ -23,24 +23,34 @@ logger = logging.getLogger(__name__)
 INDEX_SYMBOL = "sh000001"        # 上证指数(腾讯符号,非 ETF 的 sz 前缀)
 INDEX_NAME = "上证指数"
 INDEX_DAYS = 60                  # 门控 J 值需约 9+ 根,取 60 根足够
+_INDEX_HISTORY_START = "2018-01-01"   # KDJ 递归对起点敏感,取尽量长历史(接口最多 640 根)
 
 
-def _index_closes() -> list[float]:
-    """上证指数近 N 日收盘价(腾讯日线,sh000001)。失败返回 []。"""
+def _index_data() -> tuple[list[float], str, float]:
+    """上证指数近 N 日收盘价 + 最后交易日 + 最后收盘价(腾讯日线,sh000001)。
+
+    失败返回 ([], "", 0)。KDJ 从 K=D=50 递归,历史越长越接近行情软件标准口径。
+    """
     try:
         from ..fetchers.etf_kline import HEADERS, _get_json
 
-        start = (pd.Timestamp.today() - pd.Timedelta(days=120)).strftime("%Y-%m-%d")
         end = (pd.Timestamp.today() + pd.Timedelta(days=1)).strftime("%Y-%m-%d")
         url = "https://web.ifzq.gtimg.cn/appstock/app/fqkline/get"
-        js = _get_json(url, {"param": f"{INDEX_SYMBOL},day,{start},{end},640,qfq"})
+        js = _get_json(url, {"param": f"{INDEX_SYMBOL},day,{_INDEX_HISTORY_START},{end},640,qfq"})
         data = (js.get("data") or {}).get(INDEX_SYMBOL) or {}
         bars = data.get("qfqday") or data.get("day") or []
         closes = [float(b[2]) for b in bars if len(b) > 2]
-        return closes[-INDEX_DAYS:]
+        last_date = bars[-1][0] if bars else ""
+        last_close = closes[-1] if closes else 0.0
+        return closes[-250:], last_date, last_close
     except Exception as exc:  # noqa: BLE001
         logger.warning("上证指数日线获取失败(门控默认开放): %s", exc)
-        return []
+        return [], "", 0.0
+
+
+def _index_closes() -> list[float]:
+    """上证指数近 N 日收盘价(close.py 等旧接口兼容)。"""
+    return _index_data()[0]
 
 
 def _vol_ratio(snap: dict, avg_turn: float | None, now: datetime | None = None) -> float | None:
@@ -84,7 +94,7 @@ def check_live(model: RuleModel, cfg: Config | None = None) -> dict:
     # 大盘门控
     gate_rule = model.global_.market_gate.rules[0] if model.global_.market_gate.rules else None
     gate_condition = gate_rule.condition if gate_rule else None
-    closes = _index_closes()
+    closes, index_date, index_close = _index_data()
     gate_open = gate_open_from_index_closes(closes, gate_condition)
     j = None
     from .checker import kdj_j
@@ -114,6 +124,8 @@ def check_live(model: RuleModel, cfg: Config | None = None) -> dict:
             "j": round(j, 2) if j is not None else None,
             "rule": gate_condition or "",
             "action": gate_rule.action if gate_rule else "",
+            "date": index_date or "",
+            "close": index_close or None,
         },
         "verdicts": [v.to_dict() for v in verdicts],
     }
