@@ -41,9 +41,9 @@ const app = createApp({
       pbSaving: false,
       pbSaved: "",
       // 盘前视图(实时新闻 + LLM 提取,三块联动)
-      mgNews: null,          // {summary, items:[{time,text,impact,sector,reason}]}
-      mgPlaybook: [],        // [{code,name,overnight,action}]
-      mgPlan: [],            // [{code,name,current,plan}]
+      mgNews: null,          // {summary, items:[{time,text,impact,sector,reason,source}]}
+      mgPlaybook: [],        // [{code,name,overnight,action}] 唯一可编辑真源
+      mgDiscipline: [],      // [str] 今日纪律(消息面催化驱动)
       mgTime: "",
       mgError: "",
       mgLoading: false,
@@ -83,7 +83,8 @@ const app = createApp({
       };
     },
     discipline() {
-      return this.bm?.global_?.discipline || [];
+      // 优先用盘前视图的「今日纪律」(消息面催化驱动);未生成时退回作战地图 §六
+      return this.mgDiscipline.length ? this.mgDiscipline : (this.bm?.global_?.discipline || []);
     },
     positions() {
       return (this.bm?.instruments || [])
@@ -97,10 +98,10 @@ const app = createApp({
       (ins.levels || []).forEach((l) => { map[l.name] = l.price; });
       const out = [];
       const ln = (name, color, type = "dashed") => {
-        if (map[name] != null) out.push({ yAxis: map[name], name: name, lineStyle: { color, type } });
+        if (map[name] != null) out.push({ name: name, value: map[name], color, type });
       };
-      ln("买区下沿", "#ffd166");
-      ln("买区上沿", "#ffd166");
+      ln("买区下沿", "#ffd166", "dashed");
+      ln("买区上沿", "#ffd166", "dashed");
       ln("突破点", "#4c8dff", "dotted");
       ln("减仓红线", "#ff9f6e", "solid");
       ln("生命线", "#ff5c6c", "solid");
@@ -173,8 +174,12 @@ const app = createApp({
     fmtQuote(snap) {
       return snap && snap.last_price != null ? this.fmt(snap.last_price, 3) : "-";
     },
+    snapChg(snap) {
+      // 同花顺基金快照涨跌幅字段为 price_change_ratio_pct(非 change_pct)
+      return snap ? snap.price_change_ratio_pct : null;
+    },
     volRatio(snap) {
-      // 快照无直接量比,用换手率近似(标签为换手)
+      // 快照无直接量比,用换手率近似(列头为「换手」)
       if (snap && snap.turnover_ratio_pct != null) {
         return this.fmt(snap.turnover_ratio_pct, 2) + "%";
       }
@@ -301,6 +306,16 @@ const app = createApp({
     maColor(p) {
       return { 5: "#f0b90b", 10: "#4c8dff", 20: "#a56eff", 60: "#ff9800", 120: "#26c6da", 250: "#9e9e9e" }[p] || "#4c8dff";
     },
+    plainClone(v, seen = new Map()) {
+      // 深拷贝为普通对象:剥离 Vue 响应式 Proxy(Proxy 会让 ECharts 内部操作偶发报
+      // "Cannot read properties of undefined (reading 'type')" 并卡死 dataZoom)。函数原样保留。
+      if (v === null || typeof v !== "object") return v;
+      if (seen.has(v)) return seen.get(v);
+      const out = Array.isArray(v) ? [] : {};
+      seen.set(v, out);
+      for (const k of Object.keys(v)) out[k] = this.plainClone(v[k], seen);
+      return out;
+    },
 
     // ---- markdown 渲染(轻量:表/标题/粗斜体/列表/引用/链接,先转义防注入) ----
     mdToHtml(md) {
@@ -361,24 +376,50 @@ const app = createApp({
       const rows = r.rows || [];
       if (r.period === "min") return this.renderMinute(r, rows);
 
-      // ---- 日K / 30分K: 蜡烛图 + 均线 + 成交量(MA5/MA10量) ----
+      // ---- 日K / 30分K: 蜡烛图 + 均线 + 关键位线(可点图例隐藏) + 成交量 ----
       const x = rows.map((x) => x.t);
       const kData = rows.map((x) => [x.o, x.c, x.l, x.h]);
       const vol = rows.map((x) => x.v || 0);
       const isDay = r.period === "day";
       const maPeriods = isDay ? [5, 10, 20, 60, 120, 250] : [5, 10, 20, 60];
       const closeArr = rows.map((x) => x.c);
-      const maSeries = maPeriods.map((p) => ({
-        name: "MA" + p, type: "line", data: this.ma(closeArr, p), smooth: true,
-        showSymbol: false, xAxisIndex: 0, yAxisIndex: 0,
-        lineStyle: { width: 1, type: p >= 120 ? "dashed" : "solid", color: this.maColor(p) },
-        itemStyle: { color: this.maColor(p) }, emphasis: { disabled: true }, z: 3,
+      const levelLines = this.levelLines;   // 计算属性(属性访问,非方法)
+      const n = rows.length;
+
+      // 均线:endLabel 在右端标注"MA120 0.617";图例可点选隐藏/显示
+      const maSeries = maPeriods.map((p) => {
+        const data = this.ma(closeArr, p);
+        const last = data[n - 1];
+        return {
+          name: "MA" + p, type: "line", data: data, smooth: true,
+          showSymbol: false, xAxisIndex: 0, yAxisIndex: 0,
+          lineStyle: { width: 1, type: p >= 120 ? "dashed" : "solid", color: this.maColor(p) },
+          itemStyle: { color: this.maColor(p) }, emphasis: { disabled: true }, z: 3,
+          endLabel: { show: true, formatter: "MA" + p + " " + (last == null ? "-" : last.toFixed(3)),
+                      color: this.maColor(p), fontSize: 10, distance: 4 },
+        };
+      });
+
+      // 关键位线:恒值 line series(不用 markLine——markLine+dataZoom 在 ECharts5 有 bug 会卡死滑动条)。
+      // 每条独立 series → 图例可点选隐藏;endLabel 标注"生命线 0.778"。
+      const levelSeries = levelLines.map((l) => ({
+        name: l.name, type: "line", data: Array(n).fill(l.value),
+        showSymbol: false, silent: true, xAxisIndex: 0, yAxisIndex: 0,
+        lineStyle: { width: 1, type: l.type, color: l.color, opacity: 0.9 },
+        itemStyle: { color: l.color }, emphasis: { disabled: true }, z: 2,
+        endLabel: { show: true, formatter: l.name + " " + l.value.toFixed(3), color: l.color, fontSize: 10, distance: 4 },
       }));
-      const legend = maPeriods.map((p) => "MA" + p);
+
+      const legendData = [...maPeriods.map((p) => "MA" + p), ...levelLines.map((l) => l.name)];
+      const legendSelected = {};
+      maPeriods.forEach((p) => { legendSelected["MA" + p] = p < 250; });  // 默认隐藏 MA250 减噪
+      levelLines.forEach((l) => { legendSelected[l.name] = true; });
       const option = {
         backgroundColor: "transparent", animation: false,
         tooltip: { trigger: "axis", axisPointer: { type: "cross" } },
-        legend: { data: legend, top: 0, left: 0, textStyle: { color: "#787b86", fontSize: 10 }, itemWidth: 12, itemHeight: 8, itemGap: 6 },
+        legend: { data: legendData, top: 0, left: 0, selectedMode: "multiple",
+                  textStyle: { color: "#787b86", fontSize: 10 }, itemWidth: 12, itemHeight: 8, itemGap: 6,
+                  selected: legendSelected },
         axisPointer: { link: [{ xAxisIndex: "all" }] },
         grid: [
           { left: 58, right: 18, top: 22, height: "52%" },
@@ -393,14 +434,13 @@ const app = createApp({
           { gridIndex: 1, axisLabel: { color: "#787b86", fontSize: 10, formatter: (v) => this.fmtVol(v) }, splitLine: { show: false } },
         ],
         dataZoom: [
-          { type: "inside", xAxisIndex: [0, 1], start: 55, end: 100 },
-          { type: "slider", xAxisIndex: [0, 1], bottom: 0, height: 14, borderColor: "#232a38", fillerColor: "rgba(76,141,255,0.1)" },
+          { type: "slider", xAxisIndex: [0], start: 55, end: 100, bottom: 0, height: 14, borderColor: "#232a38", fillerColor: "rgba(76,141,255,0.1)" },
         ],
         series: [
           { name: "K线", type: "candlestick", data: kData, xAxisIndex: 0, yAxisIndex: 0,
-            itemStyle: { color: "#f23645", color0: "#089981", borderColor: "#f23645", borderColor0: "#089981" },
-            markLine: this.levelMarkLine(), z: 2 },
+            itemStyle: { color: "#f23645", color0: "#089981", borderColor: "#f23645", borderColor0: "#089981" }, z: 3 },
           ...maSeries,
+          ...levelSeries,
           { name: "成交量", type: "bar", data: vol, xAxisIndex: 1, yAxisIndex: 1,
             itemStyle: { color: (p) => (p.dataIndex > 0 && rows[p.dataIndex].c < rows[p.dataIndex - 1].c ? "#089981" : "#f23645") } },
           { name: "MA5量", type: "line", data: this.ma(vol, 5), xAxisIndex: 1, yAxisIndex: 1,
@@ -410,7 +450,18 @@ const app = createApp({
         ],
       };
       try {
-        this.chart.setOption(option, true);
+        // 先剥离 Vue 响应式 Proxy 再交给 ECharts(见 plainClone 注释)
+        this.chart.setOption(this.plainClone(option), true);
+        // ECharts5 首次 setOption 后 dataZoom 双轴联动偶发状态损坏(滑动条/缩放卡死,报
+        // "Cannot read properties of undefined (reading 'type')")。等首帧渲染稳定后再补一次
+        // commit 修复;用 getInstanceByDom 取实例(避免 this.chart 引用陈旧)。
+        setTimeout(() => {
+          try {
+            const el = this.$refs.chartEl;
+            const c = el && echarts.getInstanceByDom(el);
+            if (c) c.setOption(c.getOption(), true);
+          } catch (e) { /* 忽略 */ }
+        }, 1500);
       } catch (e) {
         this.msg = "图表渲染错误: " + e;
       }
@@ -459,16 +510,6 @@ const app = createApp({
         lineStyle: { color: "#e8b339", type: "dashed" },
       };
     },
-    levelMarkLine() {
-      // 速查卡价位自动叠线(买区/突破/减仓红线/生命线);标注放左端,避免遮住最新一根K线
-      return {
-        silent: true,
-        symbol: "none",
-        label: { show: true, position: "insideStartTop", fontSize: 10, color: "#d1d4dc" },
-        data: this.levelLines,
-      };
-    },
-
     // ---- 盘后生成(里程碑4) ----
     async loadClose() {
       this.closeError = "";
@@ -546,19 +587,20 @@ const app = createApp({
         if (!r.ok) { this.mgError = r.error || "盘前视图生成失败"; return; }
         this.mgNews = r.news || null;
         this.mgPlaybook = r.playbook || [];
-        this.mgPlan = r.plan || [];
+        this.mgDiscipline = r.discipline || [];
         this.mgTime = new Date().toLocaleTimeString("zh-CN", { hour: "2-digit", minute: "2-digit" });
       } finally {
         this.mgLoading = false;
       }
     },
     newsCls(impact) {
-      if (impact === "利空") return "nw bad";
-      if (impact === "利好") return "nw good";
+      // A股配色:利好=红,利空=绿,中性=白
+      if (impact === "利好") return "nw up";
+      if (impact === "利空") return "nw down";
       return "nw mid";
     },
     impactTag(impact) {
-      return impact === "利空" ? "🔴" : impact === "利好" ? "🟢" : "⚪";
+      return impact === "利好" ? "🔴" : impact === "利空" ? "🟢" : "⚪";
     },
     async saveMorningPlaybook() {
       if (!this.mgPlaybook.length) return;
@@ -626,7 +668,8 @@ const app = createApp({
   },
 
   async mounted() {
-    this.initChart();
+    // 图表在 renderChart 里按需初始化(数据就绪、容器尺寸已定后再 echarts.init,避免
+    // 提前 init 导致 dataZoom 状态损坏——见 renderChart 注释)
     this.loadIndices();
     this.loadWatchlist();
     this.loadBattlemap();

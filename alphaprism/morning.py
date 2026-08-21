@@ -54,7 +54,7 @@ def _technical(symbol: str, conn) -> dict:
 def _build_context(cfg, conn) -> dict:
     """盘前催化上下文:新闻命中 + 板块异动/热榜 + 技术面 + 拥挤度。"""
     kws = cfg.get("news", "keywords", default={}) or {}
-    items = news_mod.fetch_sina_feed(
+    items = news_mod.fetch_all_feeds(
         pages=cfg.get("news", "pages", default=1),
         page_size=cfg.get("news", "page_size", default=50),
     )

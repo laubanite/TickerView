@@ -333,7 +333,9 @@ def main() -> None:
     print("关闭本窗口即停止服务。")
     # 延迟打开浏览器(等服务真正就绪)
     threading.Timer(1.2, lambda: webbrowser.open(url)).start()
-    app.run(host="127.0.0.1", port=port, debug=False)
+    # threaded=True:盘前视图的 LLM 调用较慢(10-20s),若不开启线程会阻塞其他所有接口
+    # (自选股/K线/指数),导致行情图迟迟不渲染。多线程后各请求互不阻塞。
+    app.run(host="127.0.0.1", port=port, debug=False, threaded=True)
 
 
 if __name__ == "__main__":

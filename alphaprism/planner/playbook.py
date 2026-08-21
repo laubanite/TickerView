@@ -230,11 +230,12 @@ def append_to_journal(md: str, path: str) -> None:
 # ---------------------------------------------------------------- 盘前视图(实时+LLM,三块联动)
 
 def build_morning_view(model: RuleModel, cfg: Config | None = None) -> dict:
-    """盘前视图:①隔夜重要消息(新浪7x24 实时 + LLM 提取/分类) + ②今日剧本 + ③盘前预案。
+    """盘前视图:①隔夜重要消息(新浪+东财实时 + LLM 提取/分类) + ②今日剧本 + ③今日纪律。
 
-    三者联动:LLM 先提取重要新闻(带 利空/利好/中性 + 板块),再在同一上下文里生成
-    剧本(隔夜影响/今日动作)与预案(当前/若…则…)。返回结构化 dict 供前端分块渲染。
-    LLM 任一环节失败 → 各自降级(新闻给板块命中原文,剧本/预案给规则模板)。
+    联动:LLM 先提取重要新闻(带 利空/利好/中性 + 板块 + 来源),再在同一上下文里生成
+    剧本(隔夜影响/今日动作,唯一可编辑真源,写入作战地图)与**今日纪律**(结合消息面催化,
+    非照搬作战地图 §六)。返回结构化 dict 供前端分块渲染。
+    LLM 任一环节失败 → 各自降级(新闻给板块命中原文,剧本给规则模板,纪律给 §六 节选)。
     """
     cfg = cfg or Config()
     conn = connect()
@@ -247,9 +248,9 @@ def build_morning_view(model: RuleModel, cfg: Config | None = None) -> dict:
 
     rows = _instrument_contexts(model, sectors)
 
-    # ① 隔夜重要消息:实时抓取 + LLM 提取
+    # ① 隔夜重要消息:新浪 + 东财双源实时抓取 + LLM 提取
     kws = cfg.get("news", "keywords", default={}) or {}
-    feed = news_mod.fetch_sina_feed(
+    feed = news_mod.fetch_all_feeds(
         pages=cfg.get("news", "pages", default=1),
         page_size=cfg.get("news", "page_size", default=50),
     )
@@ -258,13 +259,12 @@ def build_morning_view(model: RuleModel, cfg: Config | None = None) -> dict:
     if not important.get("items"):
         important = _rule_important_news(sector_hits, rows)
 
-    # ② 剧本 + ③ 预案(联动重要新闻)
-    pp = _llm_playbook_plan(model, rows, important, cfg)
+    # ② 剧本(唯一可编辑真源) + ③ 今日纪律(消息面催化驱动)
+    pp = _llm_playbook_discipline(model, rows, important, cfg)
     playbook = pp.get("playbook") or _fallback_rows(rows)
-    plan = pp.get("plan") or _fallback_plan(rows)
+    discipline = pp.get("discipline") or _fallback_discipline(model)
     # 保证每只标的都有行(LLM 覆盖不全时用规则模板补齐)
     playbook = _merge_missing(playbook, _fallback_rows(rows))
-    plan = _merge_missing(plan, _fallback_plan(rows))
 
     g = model.global_.market_gate
     return {
@@ -274,7 +274,7 @@ def build_morning_view(model: RuleModel, cfg: Config | None = None) -> dict:
                  "rules": [{"condition": r.condition, "action": r.action} for r in g.rules]},
         "news": important,
         "playbook": playbook,
-        "plan": plan,
+        "discipline": discipline,
     }
 
 
@@ -285,25 +285,27 @@ _IMPACT_ORDER = {"利空": 0, "利好": 1, "中性": 2}
 
 def _llm_important_news(feed: list[dict], sector_hits: dict[str, list[dict]],
                         rows: list[dict], cfg) -> dict:
-    """LLM 从新浪 7x24 快讯里挑重要新闻,分类 利空/利好/中性 并关联板块。失败返回 {}。"""
+    """LLM 从新浪+东财快讯里挑重要新闻,分类 利空/利好/中性 并关联板块。失败返回 {}。"""
     from ..llm import chat
 
     sectors_names = sorted({r["sector"] for r in rows if r["sector"]})
-    lines = ["你是 A股中长线交易系统的盘前新闻助理。下面是新浪 7x24 快讯(时间倒序)。"
-             f"跟踪板块: {'、'.join(sectors_names) or '无'} + 大盘。"]
+    lines = ["你是 A股中长线交易系统的盘前新闻助理。下面是 新浪7x24 + 东方财富快讯(时间倒序,"
+             "已标注来源)。跟踪板块: " + ("、".join(sectors_names) or "无") + " + 大盘。"]
     lines.append("请挑出对以上板块或大盘**最重要**的 5-8 条新闻:")
-    lines.append("- 每条压缩到 60 字以内;标注 影响(利好/利空/中性) 和 关联板块(可填 大盘/其他);"
-                 "用一句话 reason 说明为什么重要")
-    lines.append("- 忽略无关/娱乐/重复新闻;宁少勿滥,只保留真正影响盘面的")
+    lines.append("- 每条压缩到 60 字以内;标注 影响(利好/利空/中性)、关联板块(可填 大盘/其他)"
+                 "与来源(新浪/东财);用一句话 reason 说明为什么重要")
+    lines.append("- **优先选宏观/政策/大盘方向/行业级(涨价、扩产、政策、龙头业绩)消息**;"
+                 "忽略单个公司注册/股权/琐事、娱乐、重复新闻;宁少勿滥")
     lines.append("\n【快讯】")
-    for it in feed[:30]:
-        lines.append(f"- {it['time'][5:16]} {it['text'][:90]}")
+    for it in feed[:40]:
+        src = "东财" if it.get("tag") else "新浪"
+        lines.append(f"- [{src}] {it['time'][5:16]} {it['text'][:90]}")
     lines.append("\n只输出 JSON:")
     lines.append('{"summary":"一句话盘面综述", "items":[{"time":"08:30","text":"...","impact":"利好|利空|中性",'
-                 '"sector":"化工|大盘|其他","reason":"..."}]}')
+                 '"sector":"化工|大盘|其他","source":"新浪|东财","reason":"..."}]}')
     prompt = "\n".join(lines)
     try:
-        text = chat([{"role": "user", "content": prompt}], cfg=cfg, temperature=0.2, max_tokens=1000)
+        text = chat([{"role": "user", "content": prompt}], cfg=cfg, temperature=0.2, max_tokens=1200)
         if not text:
             return {}
         start, end = text.find("{"), text.rfind("}")
@@ -318,6 +320,7 @@ def _llm_important_news(feed: list[dict], sector_hits: dict[str, list[dict]],
                 "text": (it.get("text") or "").strip()[:80],
                 "impact": impact,
                 "sector": it.get("sector") or "其他",
+                "source": (it.get("source") or "新浪")[:4],
                 "reason": (it.get("reason") or "").strip()[:50],
             })
         out.sort(key=lambda x: _IMPACT_ORDER.get(x["impact"], 9))
@@ -340,6 +343,7 @@ def _rule_important_news(sector_hits: dict[str, list[dict]], rows: list[dict]) -
                 "text": (it.get("text") or "")[:80],
                 "impact": "中性",
                 "sector": sector,
+                "source": "新浪" if it.get("tag") else "东财",
                 "reason": "板块关键词命中(LLM 未启用,人工判断)",
             })
     if not items:
@@ -350,18 +354,20 @@ def _rule_important_news(sector_hits: dict[str, list[dict]], rows: list[dict]) -
 
 # ---------------------------------------------------------------- ②③ 剧本+预案
 
-def _llm_playbook_plan(model: RuleModel, rows: list[dict], important: dict, cfg) -> dict:
-    """LLM 在同一消息面上下文里生成 今日剧本(隔夜影响/今日动作) + 盘前预案(当前/若…则…)。"""
+def _llm_playbook_discipline(model: RuleModel, rows: list[dict], important: dict, cfg) -> dict:
+    """LLM 在同一消息面上下文里生成 今日剧本(隔夜影响/今日动作) + 今日纪律(消息面催化驱动)。"""
     from ..llm import chat
 
-    lines = ["你是 A股中长线交易系统的盘前剧本与预案助手。基于**隔夜重要新闻** + 作战地图关键位 + 技术面,"
-             "为每只标的生成两块:今日剧本(隔夜影响/今日动作) + 盘前预案(当前状态/若…则…预案)。",
-             "规则:动作必须引用真实价位、用'若…则…'、不编造数字;剧本与预案应体现消息面催化的影响。"]
+    lines = ["你是 A股中长线交易系统的盘前剧本与纪律助手。基于**隔夜重要新闻** + 作战地图关键位 + 技术面,"
+             "为每只标的生成今日剧本(隔夜影响/今日动作),并给出**今日纪律**(结合消息面催化,"
+             "不是照搬通用纪律——把利空/利好落到'今天具体怎么防/怎么等'上)。",
+             "规则:动作必须引用真实价位、用'若…则…'、不编造数字;剧本应体现消息面催化的影响。",
+             "纪律要求:**每条不超过 30 字、一句话、只讲今天最要紧的一条**,宁少勿滥(3-5 条)。"]
     lines.append("\n【盘面综述】")
     lines.append(f"- {important.get('summary') or '-'}")
     lines.append("\n【隔夜重要新闻】")
     for it in important.get("items") or []:
-        lines.append(f"- [{it['impact']}]({it.get('sector')}) {it.get('time')} {it.get('text')} —— {it.get('reason')}")
+        lines.append(f"- [{it['impact']}]({it.get('sector')}/{it.get('source')}) {it.get('time')} {it.get('text')} —— {it.get('reason')}")
     g = model.global_.market_gate
     lines.append("\n【大盘门控】")
     if g.conclusion:
@@ -369,8 +375,8 @@ def _llm_playbook_plan(model: RuleModel, rows: list[dict], important: dict, cfg)
     for r in g.rules:
         lines.append(f"- 门控: {r.condition} → {r.action}")
     if model.global_.discipline:
-        lines.append("\n【通用纪律(节选)】")
-        for d in model.global_.discipline[:3]:
+        lines.append("\n【通用纪律(节选,仅作底线,今日纪律要结合消息改写)】")
+        for d in model.global_.discipline[:4]:
             lines.append(f"- {d}")
     lines.append("\n【各标的】")
     for r in rows:
@@ -390,54 +396,42 @@ def _llm_playbook_plan(model: RuleModel, rows: list[dict], important: dict, cfg)
             lines.append(f"  异动 {r['anomaly_count']} 条,无新消息")
         else:
             lines.append("  无新增消息/异动")
-    lines.append("\n只输出 JSON,每只标的都要有 playbook 行与 plan 行:")
+    lines.append("\n只输出 JSON,每只标的都要有 playbook 行;discipline 为 3-5 条今日纪律:")
     lines.append('{"playbook":[{"code":"516020","overnight":"隔夜影响(1行)","action":"今日动作(若…则…)"}], '
-                 '"plan":[{"code":"516020","current":"当前状态","plan":"今日预案(若…则…)"}]}')
+                 '"discipline":["今日纪律1(结合消息面)","今日纪律2",...]}')
     prompt = "\n".join(lines)
     try:
-        text = chat([{"role": "user", "content": prompt}], cfg=cfg, temperature=0.3, max_tokens=2400)
+        text = chat([{"role": "user", "content": prompt}], cfg=cfg, temperature=0.3, max_tokens=2000)
         if not text:
             return {}
         start, end = text.find("{"), text.rfind("}")
         data = json.loads(text[start:end + 1])
         code_set = {r["code"] for r in rows}
-
-        def _map(kind):
-            out = []
-            for row in data.get(kind) or []:
-                code = str(row.get("code", "")).split(".")[0]
-                name = next((r["name"] for r in rows if r["code"] == code), "")
-                if not name and not code:
-                    name = row.get("name", "大盘")
-                if kind == "playbook":
-                    out.append({"code": code, "name": name,
-                                "overnight": (row.get("overnight") or "").strip(),
-                                "action": (row.get("action") or "").strip()})
-                else:
-                    out.append({"code": code, "name": name,
-                                "current": (row.get("current") or "").strip(),
-                                "plan": (row.get("plan") or "").strip()})
-            return out
-
-        return {"playbook": _map("playbook"), "plan": _map("plan")}
+        out = []
+        for row in data.get("playbook") or []:
+            code = str(row.get("code", "")).split(".")[0]
+            name = next((r["name"] for r in rows if r["code"] == code), "")
+            if not name and not code:
+                name = row.get("name", "大盘")
+            out.append({"code": code, "name": name,
+                        "overnight": (row.get("overnight") or "").strip(),
+                        "action": (row.get("action") or "").strip()})
+        discipline = [str(d).strip() for d in (data.get("discipline") or []) if str(d).strip()]
+        return {"playbook": out, "discipline": discipline}
     except Exception as exc:  # noqa: BLE001
-        logger.warning("剧本/预案 LLM 解析失败: %s", exc)
+        logger.warning("剧本/纪律 LLM 解析失败: %s", exc)
         return {}
 
 
-def _fallback_plan(rows: list[dict]) -> list[dict]:
-    """预案降级:当前 = 技术状态;预案 = 规则条件(若…则…)。"""
-    out: list[dict] = []
-    for r in rows:
-        t = r["tech"]
-        current = f"{t.get('structure')}结构,支撑{t.get('support')}/压力{t.get('resistance')}" if t else "无技术状态"
-        acts = []
-        for rule in r["rules"]:
-            if rule["computable"]:
-                acts.append(f"若{rule['condition']}→{rule['operation']}")
-        plan = "；".join(acts) if acts else "等信号(回踩企稳/放量突破),不追高"
-        out.append({"code": r["code"], "name": r["name"], "current": current, "plan": plan})
-    return out
+def _fallback_discipline(model: RuleModel) -> list[str]:
+    """纪律降级:大盘门控结论 + §六 通用纪律节选(不编造消息面解读)。"""
+    g = model.global_.market_gate
+    out: list[str] = []
+    if g.conclusion:
+        out.append(f"大盘: {g.conclusion}")
+    for d in model.global_.discipline[:4]:
+        out.append(d)
+    return out or ["回踩买、突破买,绝不追买;等缩量企稳信号,不接飞刀"]
 
 
 def _merge_missing(entries: list[dict], fallback: list[dict]) -> list[dict]:
