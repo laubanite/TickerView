@@ -25,10 +25,10 @@ const app = createApp({
       btLoading: false,
       chart: null,
       btChart: null,
-      // 盘中核对(里程碑3)
-      checkGate: null,
-      checkVerdicts: [],
-      checkError: "",
+      infoChart: null,
+      infoStats: null,
+      // 盘中技术快照(2026-08-22,与作战地图解耦)
+      techCode: "",           // 当前选中的快照标的
       // 盘后生成(里程碑4)
       closeMd: "",
       closeError: "",
@@ -42,26 +42,116 @@ const app = createApp({
       pbSaved: "",
       // 盘前视图(实时新闻 + LLM 提取,三块联动)
       mgNews: null,          // {summary, items:[{time,text,impact,sector,reason,source}]}
+      mgHealth: null,        // {fetched_at, stale, latest_ts, all_failed, sources:[{source,ok,rows,error}]}
       mgPlaybook: [],        // [{code,name,overnight,action}] 唯一可编辑真源
       mgDiscipline: [],      // [str] 今日纪律(消息面催化驱动)
-      mgTime: "",
       mgError: "",
       mgLoading: false,
       mgSaved: "",
       // 自选股管理(§5.6)
       newSym: "",
+      // 设置(重构为居中弹窗 Modal · 2026-08-29):左侧导航(模型/持仓/通用)+ 右侧内容区
+      settingsOpen: false,    // 弹窗开关(右上角「设置」按钮;X/遮罩/Esc 关闭)
+      settingsPane: "model",  // 当前面板键: model | holdings | general
+      // 模型面板:LLM 配置可编辑表单(/api/llm 读写)
+      llmProfiles: [],        // [{uid,provider,model,base_url,has_key,testState}] 编辑列表
+      llmKeys: [],            // [{provider,set,masked,input,visible,plain}] API Key 卡片
+      llmDefaultUrls: {},     // provider -> 默认 Base URL(/api/llm 返回)
+      llmError: "",
+      llmSavedAt: "",
+      llmSaving: false,
+      editingUid: "",         // 正在行内编辑的 uid
+      editingRow: null,       // {provider,model,base_url,key,keyVisible,hasKey}
+      llmTesting: {},         // uid -> bool 测试中
+      llmTestMsg: {},         // uid -> {ok,text}
+      testMsg: null,          // 编辑表单内测试结果 {ok,text}
+      testLoading: false,
+      dragUid: "",            // 拖拽排序:被拖行的 uid
+      dragOverUid: "",        // 拖拽排序:当前悬停目标行 uid
+      advOpen: false,         // 高级配置说明卡片展开
+      advMsg: "",
+      _uidSeed: 0,
+      // 设置(MVP):持仓卡 + 账户(架构 §八)
+      holdings: [],
+      account: { total_capital: "", cash: "" },
+      settingsMsg: "",
+      acctSaved: "",
+      acctSaving: false,
+      holdForm: { symbol: "", cost: "", quantity: "", status: "持仓" },
+      // 设置:刷新间隔(秒,顶部指数 + 候选股池轮询;存 config/web.yaml)
+      refreshSec: 12,
+      refreshSaved: "",
+      refreshSaving: false,
+      _pollTimer: null,
+      _started: false,
       wlMsg: "",
       wlError: "",
-      // 盘中快照(§5.4)
-      snapMd: "",
-      snapError: "",
-      snapLoading: false,
+      // 盘中技术快照两张卡(2026-08-22):数据快照(确定性)+ 深入分析(LLM),完全独立
+      snapFacts: "",          // 卡1 数据快照(程序计算,不经过 LLM)
+      snapFactsError: "",
+      snapFactsLoading: false,
+      snapAnalysis: "",       // 卡2 深入分析(LLM 多周期矛盾推演)
+      snapAnalysisError: "",
+      snapAnalysisLoading: false,
+      cfMarkdown: "",         // 卡3 反事实推演(盘后·情景分支,手动触发,非建议)
+      cfError: "",
+      cfLoading: false,
+      snapError: "",          // 推送错误
       snapPushing: false,
       dayRows: [],      // 当前标的日K rows(供量比/均量/叠线计算)
+      // 悬浮面板(里程碑7):markers[code] = facts 接口返回的确定性 panel 段
+      markers: {},          // { code: {status_word, scenario, risk, anchors, ok, updated_at} }
+      markersTime: {},      // { code: "HH:MM" } 最近一次成功生成时间
+      refreshCode: "",      // 正在单只生成快照的标的
+      floatOnlyHeld: false, // 「仅持仓」过滤(显示层,存 localStorage)
+      floatCols: { marker: true, chg: true, turn: false, vol: false, amt: false },
     };
   },
 
   computed: {
+    settingsNav() {
+      // 设置弹窗左侧垂直导航(点击切换右侧内容区)
+      return [
+        { key: "model", label: "模型" },
+        { key: "holdings", label: "持仓" },
+        { key: "general", label: "通用" },
+      ];
+    },
+    floatColDefs() {
+      // 可选列定义+顺序(标记默认开;涨跌幅默认开;换手=换手率/量/额默认关)
+      return [
+        { key: "marker", label: "标记" },
+        { key: "chg", label: "涨跌" },
+        { key: "turn", label: "换手" },
+        { key: "vol", label: "量" },
+        { key: "amt", label: "额" },
+      ];
+    },
+    floatWidth() {
+      // 自适应宽度:按展示指标列数缩放(仅2列→窄,3列→中,全开→宽)
+      // 固定部分:持标签槽24 + 名称68 + 现价48 + 左右内边距24 = 164
+      // 可变部分:每开一列各加其列宽;标记列按 84 估算
+      const w = { chg: 48, turn: 40, vol: 42, amt: 46 };
+      let width = 164;
+      ["chg", "turn", "vol", "amt"].forEach((k) => { if (this.floatCols[k]) width += w[k] + 4; });
+      if (this.floatCols.marker) width += 84 + 4;
+      return Math.min(Math.max(width, 250), 460);
+    },
+    floatRows() {
+      // 面板展示行 = 自选股池(唯一真源);「仅持仓」过滤为显示层,不新增数据源
+      const rows = this.floatOnlyHeld
+        ? this.watchlist.filter((w) => this.holdingOf(w.symbol))
+        : this.watchlist;
+      return rows;
+    },
+    floatShown() {
+      return this.floatRows.length;
+    },
+    floatUpdated() {
+      // 面板整体最近更新时间 = 所有已生成标记的最新时间
+      const times = Object.values(this.markersTime);
+      return times.length ? "已更新 " + times.reduce((a, b) => (a > b ? a : b)) : "";
+    },
     idxDanger() {
       return false; // 大盘破位判定后续里程碑接入
     },
@@ -90,6 +180,45 @@ const app = createApp({
       return (this.bm?.instruments || [])
         .filter((i) => i.position && i.position.cost != null)
         .map((i) => ({ code: i.code, name: i.name, ...i.position }));
+    },
+    mgHealthText() {
+      // 数据健康 · 标题行:正常态显示"HH:MM 更新 · 新浪N条/东财N条"(单源失败只剩可用源)
+      const h = this.mgHealth;
+      if (!h) return "";
+      if (h.all_failed || h.stale) return "";   // 异常态交给空状态文案
+      const ok = (h.sources || []).filter((s) => s.ok);
+      const t = (h.fetched_at || "").slice(11, 16);
+      const parts = ok.map((s) => `${s.source === "sina" ? "新浪" : "东财"}${s.rows}条`);
+      return (t ? t + " 更新 · " : "") + (parts.join("/") || "无数据");
+    },
+    newsEmptyText() {
+      // 空状态一行诚实文案:数据源不可用 / 数据陈旧 / 真无消息
+      const h = this.mgHealth;
+      if (h && h.all_failed) return "数据源不可用 · 暂无实时消息";
+      if (h && h.stale) return `最新消息 ${(h.latest_ts || "").slice(0, 16)} · 数据未更新`;
+      return "暂无重要消息";
+    },
+    mgNewsMerged() {
+      // 同板块同利好/同利空消息合并展示;相同 reason 去重,消除信息冗余
+      const items = this.mgNews?.items || [];
+      const groups = new Map();
+      for (const it of items) {
+        const key = (it.sector || "其他") + "|" + (it.impact || "中性");
+        const g = groups.get(key);
+        if (g) {
+          g.texts.push(it.text);
+          if (it.reason && !g.reasons.includes(it.reason)) g.reasons.push(it.reason);
+        } else {
+          groups.set(key, { ...it, texts: [it.text], reasons: it.reason ? [it.reason] : [] });
+        }
+      }
+      return [...groups.values()].map((g) => {
+        const { texts, reasons, ...rest } = g;
+        return { ...rest, text: texts.join("；"), reason: reasons.join("；") };
+      });
+    },
+    todayStr() {
+      return this.mgNews?.date || new Date().toISOString().slice(0, 10);
     },
     levelLines() {
       const ins = this.currentInstrument();
@@ -152,6 +281,7 @@ const app = createApp({
       this.view = this.view === v ? "" : v;
       if (this.view === "bt") this.initBtChart();
       else if (this.view === "map") this.loadBattlemap();
+      else if (this.view === "info") this.loadNewsStats();
     },
 
     // ---- 格式化 ----
@@ -169,7 +299,51 @@ const app = createApp({
       return Number(v) > 0 ? "up" : Number(v) < 0 ? "down" : "flat";
     },
     shortName(name) {
-      return name ? name.replace(/ETF.*$/, "").replace(/.*ETF/, "") : "";
+      // 名称智能化简:去粒子(ETF/LOF/基金/指数/联接/公司名/交易通道),保留主题词原意。
+      // 只在剥离粒子后仍超长时,用主题缩写对照表/去描述词进一步收窄;
+      // 绝不补省略号——完整原名字段由 name 的 title 兜底。
+      if (!name) return "";
+      let s = String(name)
+        // 1) 后缀/结尾粒子(顺序:先含代码的括号,再 ETF/LOF/基金/指数/联接)
+        .replace(/[（(]?\d{6}[）)]?/g, "")
+        .replace(/(?:ETF|LOF)/gi, "")
+        .replace(/(?:基金|指数|联接|LOF)$/i, "")
+        .replace(/(?:$|·)(?:精选|优选|龙头|增强|量化|平滑|主动)$/i, "")
+        // 2) 交易通道域名合并:港股通→港股 / 深港通→深股 / 沪港通→沪股
+        .replace(/港股通/g, "港股")
+        .replace(/深港通/g, "深股")
+        .replace(/沪港通/g, "沪股")
+        // 3) 基金公司名(CN ETF 常作后缀;中外合资带 · )
+        .replace(/(?:华泰柏瑞|国泰|华夏|嘉实|易方达|南方|广发|富国|华宝|天弘|汇添富|博时|招商|银华|鹏华|华安|平安|工银|建信|景顺长城|中欧|万家|前海开源|富国|大成)/g, "")
+        .replace(/\s+/g, "");
+      if (!s) return "";
+      // 4) 已 ≤ 6 字符 → 直接返回(无省略号;6 字如"半导体设备"是完整主题词,保留)
+      if (s.length <= 6) return s;
+      // 5) 仍超长 → 主题缩写对照表(手维护,来源:常见行业/主题 ETF 简称)
+      const abbr = {
+        "港股创新药": "港股创新药",
+        "中证港股通创新药": "港股创新药",
+        "国证半导体芯片": "半导体芯片",
+        "中华半导体芯片": "半导体芯片",
+        "国证半导体设备": "半导体设备",
+        "科创创业50": "科创创业",
+        "人工智能": "人工智能",
+        "中证人工智能": "人工智能",
+        "中证医疗": "医疗",
+        "证券公司": "证券",
+        "中证军工": "军工",
+        "中证白酒": "白酒",
+        "中证消费": "消费",
+        "中证新能源": "新能源",
+        "上证50": "上证50",
+        "沪深300": "沪深300",
+      };
+      for (const [k, v] of Object.entries(abbr)) {
+        if (s.includes(k)) { s = v; break; }
+      }
+      if (s.length <= 6) return s;
+      // 6) 极端兜底:按词切分取前 5 字符主题(不补省略号,原意由 title 保证)
+      return s.slice(0, 5);
     },
     fmtQuote(snap) {
       return snap && snap.last_price != null ? this.fmt(snap.last_price, 3) : "-";
@@ -196,6 +370,7 @@ const app = createApp({
       if (r.ok && r.items.length) {
         this.watchlist = r.items;
         if (!this.current) this.select(r.items[0].symbol);
+        if (!this.techCode) this.techCode = r.items[0].symbol;
       }
     },
     async select(sym) {
@@ -229,6 +404,11 @@ const app = createApp({
     async removeSymbol(sym) {
       this.wlError = "";
       this.wlMsg = "";
+      // 双向联动:持仓标的禁止从自选池删除(后端同样有 409 保护)
+      if (this.holdingOf(sym)) {
+        this.wlError = `${sym} 在持仓卡中——请先在「设置」清空该持仓,再删除自选股`;
+        return;
+      }
       try {
         const resp = await fetch("/api/watchlist?symbol=" + encodeURIComponent(sym), { method: "DELETE" });
         const r = await resp.json();
@@ -239,28 +419,630 @@ const app = createApp({
       } catch (e) { this.wlError = String(e); }
     },
 
-    // ---- 盘中快照(§5.4) ----
-    async loadSnapshot() {
-      this.snapError = "";
-      this.snapMd = "";
-      this.snapLoading = true;
-      try {
-        const r = await api("/api/snapshot");
-        if (!r.ok) { this.snapError = r.error || "快照失败"; return; }
-        this.snapMd = r.markdown;
-      } finally {
-        this.snapLoading = false;
+    // ---- 设置:持仓卡 / 账户 / key(架构 §八) ----
+    holdingOf(sym) {
+      return this.holdings.find((h) => h.symbol === sym);
+    },
+    holdPnL(sym) {
+      const h = this.holdingOf(sym);
+      if (!h || !h.cost) return null;
+      const w = this.watchlist.find((x) => x.symbol === sym);
+      const price = w && w.snapshot && w.snapshot.last_price;
+      if (price == null) return null;
+      return (price / h.cost - 1) * 100;
+    },
+    fmtPrice3(v) {
+      return v == null || v === "" ? "-" : Number(v).toFixed(3);
+    },
+    // 设置弹窗:打开时刷新一遍数据(持仓/账户/key/LLM/刷新间隔,并收起全宽视图)
+    openSettings() {
+      this.view = "";
+      this.settingsOpen = true;
+      document.body.classList.add("modal-open");
+      this.loadSettings();
+    },
+    closeSettings() {
+      this.settingsOpen = false;
+      document.body.classList.remove("modal-open");
+    },
+    async loadSettings(config = {}) {
+      const [rh, ra] = await Promise.all([
+        api("/api/holdings"), api("/api/account"),
+      ]);
+      if (rh.ok) this.holdings = rh.holdings || [];
+      if (ra.ok) this.account = ra.account || { total_capital: "", cash: "" };
+      await this.loadLlm();
+      this.loadRefreshConfig(config);
+    },
+    async loadLlm() {
+      // 模型面板:读取生效的 LLM 配置(profiles = 尝试顺序) + 各服务商 key 掩码
+      const r = await api("/api/llm");
+      if (!r.ok) {
+        this.llmError = r.error || "LLM 配置读取失败";
+        this.cancelEdit();
+        return;
+      }
+      this.llmProfiles = (r.profiles || []).map((p) => ({ ...p, uid: "p" + (++this._uidSeed), testState: null }));
+      this.llmKeys = (r.keys || []).map((k) => ({ ...k, input: "", visible: false, plain: "" }));
+      this.llmDefaultUrls = r.default_urls || {};
+      this.llmError = "";
+      this.cancelEdit();
+    },
+    // ---- 模型面板:行内编辑(添加/编辑/排序/删除/测试/保存) ----
+    defaultUrlOf(provider) {
+      return this.llmDefaultUrls[provider] || "";
+    },
+    addModel() {
+      if (this.editingUid) return;                      // 已有编辑行时不允许再开
+      const p = { uid: "p" + (++this._uidSeed), order: this.llmProfiles.length + 1,
+                  provider: "zhipu", model: "", base_url: "", has_key: false, isNew: true };
+      this.llmProfiles.push(p);
+      this.llmSavedAt = "";
+      this.startEdit(p);
+      this.$nextTick(() => { const el = this.$refs.editModelInput; if (el) el.focus(); });
+    },
+    startEdit(p) {
+      this.editingUid = p.uid;
+      this.editingRow = {
+        provider: p.provider || "zhipu",
+        model: p.model || "",
+        base_url: p.base_url || (this.llmDefaultUrls[p.provider] || ""),
+        key: "",
+        keyVisible: false,
+        hasKey: !!p.has_key,
+      };
+      this.testMsg = null;
+    },
+    editModel(p) {
+      if (this.editingUid === p.uid) { this.cancelEdit(); return; }
+      this.startEdit(p);
+      this.llmTestMsg = { ...this.llmTestMsg, [p.uid]: null };
+    },
+    cancelEdit() {
+      // 刚添加、尚未填内容的空行随取消一起移除
+      if (this.editingUid) {
+        const row = this.llmProfiles.find((x) => x.uid === this.editingUid);
+        if (row && row.isNew) {
+          this.llmProfiles = this.llmProfiles.filter((x) => x.uid !== row.uid);
+        }
+      }
+      this.editingUid = "";
+      this.editingRow = null;
+      this.testMsg = null;
+    },
+    saveRow() {
+      const f = this.editingRow;
+      if (!f.provider || !f.model.trim()) {
+        this.testMsg = { ok: false, text: "服务商与模型名称必填" };
+        return;
+      }
+      const p = this.llmProfiles.find((x) => x.uid === this.editingUid);
+      if (!p) return;
+      p.provider = f.provider.trim();
+      p.model = f.model.trim();
+      p.base_url = (f.base_url || "").trim();
+      p.isNew = false;
+      const newKey = (f.key || "").trim();
+      if (newKey) {
+        this.stageKey(p.provider, newKey);   // 新 Key 暂存,随「保存配置」一起写盘
+        p.has_key = true;
+      }
+      const uid = p.uid;
+      this.cancelEdit();
+      this.llmTestMsg = { ...this.llmTestMsg, [uid]: null };
+      this.llmSavedAt = "";                  // 有未保存修改
+    },
+    stageKey(provider, key) {
+      const k = this.llmKeys.find((x) => x.provider === provider);
+      if (k) { k.input = key; k.set = true; }
+      else { this.llmKeys.push({ provider, set: true, masked: "", input: key, visible: false }); }
+    },
+    // 拖拽排序(行业标准手柄):把 dragUid 行移动到 drop 目标行位置
+    dragStart(p, e) {
+      this.dragUid = p.uid;
+      if (e.dataTransfer) {
+        e.dataTransfer.effectAllowed = "move";
+        e.dataTransfer.setData("text/plain", p.uid);
       }
     },
+    dragOver(p) {
+      if (this.dragUid && this.dragUid !== p.uid) this.dragOverUid = p.uid;
+    },
+    dragLeave(p) {
+      if (this.dragOverUid === p.uid) this.dragOverUid = "";
+    },
+    dropOn(p) {
+      const from = this.dragUid;
+      if (!from || from === p.uid) { this.dragUid = ""; this.dragOverUid = ""; return; }
+      const arr = this.llmProfiles.slice();
+      const i = arr.findIndex((x) => x.uid === from);
+      const j = arr.findIndex((x) => x.uid === p.uid);
+      if (i < 0 || j < 0) { this.dragUid = ""; this.dragOverUid = ""; return; }
+      const [moved] = arr.splice(i, 1);
+      arr.splice(j, 0, moved);                 // 插入到目标行位置
+      this.llmProfiles = arr;
+      this.dragUid = "";
+      this.dragOverUid = "";
+      this.llmSavedAt = "";
+    },
+    dragEnd() {
+      this.dragUid = "";
+      this.dragOverUid = "";
+    },
+    baseUrlTitle(p) {
+      const url = p.base_url || this.defaultUrlOf(p.provider);
+      return p.base_url ? p.base_url : (url ? "默认地址: " + url : "使用内置地址");
+    },
+    delModel(p) {
+      if (!confirm(`删除模型 ${p.provider} / ${p.model} ?`)) return;
+      if (this.editingUid === p.uid) this.cancelEdit();
+      this.llmProfiles = this.llmProfiles.filter((x) => x.uid !== p.uid);
+      if (this.llmTestMsg[p.uid]) this.llmTestMsg = { ...this.llmTestMsg, [p.uid]: null };
+      this.llmSavedAt = "";
+    },
+    // 测试连接:行内(已保存值)/ 编辑表单(当前输入值)
+    async testModel(p) {
+      const k = this.llmKeys.find((x) => x.provider === p.provider);
+      const body = { provider: p.provider, model: p.model, base_url: p.base_url };
+      const newKey = k && k.input ? k.input.trim() : "";
+      if (newKey) body.key = newKey;
+      this.llmTesting = { ...this.llmTesting, [p.uid]: true };
+      this.llmTestMsg = { ...this.llmTestMsg, [p.uid]: null };
+      try {
+        const resp = await fetch("/api/llm/test", {
+          method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body),
+        });
+        const r = await resp.json();
+        this.llmTestMsg = { ...this.llmTestMsg, [p.uid]: { ok: !!r.ok, text: r.ok ? r.message : (r.error || r.message || "测试失败") } };
+        // 测试结果驱动状态列:失败 → 已失效(红);成功 → 已配置(绿)
+        this.setTestState(p, !!r.ok);
+      } catch (e) {
+        this.llmTestMsg = { ...this.llmTestMsg, [p.uid]: { ok: false, text: String(e) } };
+        this.setTestState(p, false);
+      } finally {
+        this.llmTesting = { ...this.llmTesting, [p.uid]: false };
+      }
+    },
+    setTestState(p, ok) {
+      const row = this.llmProfiles.find((x) => x.uid === p.uid);
+      if (row) row.testState = ok ? "" : "fail";
+    },
+    async testRowForm() {
+      const f = this.editingRow;
+      if (!f.model.trim()) { this.testMsg = { ok: false, text: "先填写模型名称" }; return; }
+      const body = { provider: f.provider, model: f.model.trim(), base_url: (f.base_url || "").trim() };
+      if ((f.key || "").trim()) body.key = f.key.trim();
+      this.testLoading = true;
+      this.testMsg = null;
+      try {
+        const resp = await fetch("/api/llm/test", {
+          method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body),
+        });
+        const r = await resp.json();
+        this.testMsg = { ok: !!r.ok, text: r.ok ? r.message : (r.error || r.message || "测试失败") };
+      } catch (e) { this.testMsg = { ok: false, text: String(e) }; }
+      finally { this.testLoading = false; }
+    },
+    // 保存(写 settings.local.yaml + reload 生效)
+    async saveLlmConfig() {
+      const profiles = this.llmProfiles.map((p) => ({ provider: p.provider, model: p.model, base_url: p.base_url }));
+      const keys = {};
+      this.llmKeys.forEach((k) => { const v = (k.input || "").trim(); if (v) keys[k.provider] = v; });
+      this.llmSaving = true;
+      this.llmError = "";
+      this.llmSavedAt = "";
+      try {
+        const r = await this.postJson("/api/llm/save", { profiles, keys });
+        if (!r.ok) { this.llmError = r.error || "保存失败"; return; }
+        this.llmSavedAt = new Date().toTimeString().slice(0, 5) + " 已保存并立即生效";
+        await this.loadLlm();
+      } catch (e) { this.llmError = String(e); }
+      finally { this.llmSaving = false; }
+    },
+    async saveKeys() {
+      const keys = {};
+      this.llmKeys.forEach((k) => { const v = (k.input || "").trim(); if (v) keys[k.provider] = v; });
+      if (!Object.keys(keys).length) { this.llmError = "没有需要保存的 Key(输入框留空 = 不修改)"; return; }
+      this.llmSaving = true;
+      this.llmError = "";
+      try {
+        const r = await this.postJson("/api/llm/save", { keys });
+        if (!r.ok) { this.llmError = r.error || "保存失败"; return; }
+        this.llmSavedAt = new Date().toTimeString().slice(0, 5) + " Key 已保存并立即生效";
+        await this.loadLlm();
+      } catch (e) { this.llmError = String(e); }
+      finally { this.llmSaving = false; }
+    },
+    // API Key 明文查看:先弹安全警告,确认后向后端取明文展示;再点眼睛即收起
+    async peekKey(k) {
+      if (!confirm("显示完整 API Key 可能被周围人看到,确认显示?")) return;
+      try {
+        const r = await this.postJson("/api/llm/peek", { provider: k.provider });
+        if (!r.ok) { this.llmError = r.error || "获取失败"; return; }
+        k.plain = r.key;
+      } catch (e) { this.llmError = String(e); }
+    },
+    hideKey(k) {
+      k.plain = "";
+    },
+    // 高级配置:复制配置文件路径(网页端不读取/修改文件内容)
+    async copyPath(p) {
+      const done = () => { this.advMsg = p + " 已复制到剪贴板"; };
+      try {
+        await navigator.clipboard.writeText(p);
+        done();
+      } catch (e) {
+        // 降级:隐藏 textarea + execCommand(旧浏览器/非安全上下文)
+        try {
+          const ta = document.createElement("textarea");
+          ta.value = p;
+          ta.style.position = "fixed";
+          ta.style.opacity = "0";
+          document.body.appendChild(ta);
+          ta.select();
+          document.execCommand("copy");
+          document.body.removeChild(ta);
+          done();
+        } catch (e2) { this.advMsg = "复制失败,请手动复制路径"; }
+      }
+    },
+    postJson(url, body) {
+      return fetch(url, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+      }).then((r) => r.json());
+    },
+    async addHolding() {
+      const f = this.holdForm;
+      if (!f.symbol || !f.cost || !f.quantity) {
+        this.settingsMsg = "请填全 代码/成本/数量"; return;
+      }
+      try {
+        const resp = await fetch("/api/holdings", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ symbol: f.symbol, cost: f.cost,
+                                 quantity: f.quantity, status: f.status }),
+        });
+        const r = await resp.json();
+        if (!r.ok) { this.settingsMsg = r.error || "添加失败"; return; }
+        this.settingsMsg = `已添加持仓 ${r.item.symbol}`;
+        this.holdForm = { symbol: "", cost: "", quantity: "", status: "持仓" };
+        // 联动:新增持仓自动加入自选股池(若不在)——双向约束的"入池"半边
+        if (!this.watchlist.find((w) => w.symbol === r.item.symbol)) {
+          await fetch("/api/watchlist", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ symbol: r.item.symbol }),
+          });
+        }
+        this.loadSettings();
+        this.loadWatchlist();
+      } catch (e) { this.settingsMsg = String(e); }
+    },
+    async delHolding(sym) {
+      await fetch("/api/holdings?symbol=" + encodeURIComponent(sym), { method: "DELETE" });
+      this.settingsMsg = `已移除持仓 ${sym}`;
+      this.loadSettings();
+    },
+    async saveAccount() {
+      this.acctSaving = true;
+      try {
+        const resp = await fetch("/api/account", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ total_capital: this.account.total_capital,
+                                 cash: this.account.cash }),
+        });
+        const r = await resp.json();
+        if (r.ok) {
+          this.acctSaved = new Date().toTimeString().slice(0, 5) + " 已保存";
+          this.settingsMsg = "账户已保存";
+        } else {
+          this.settingsMsg = r.error || "保存失败";
+        }
+      } catch (e) { this.settingsMsg = String(e); }
+      finally { this.acctSaving = false; }
+    },
+
+    // ---- 设置:刷新间隔(秒)。控制 顶部指数 + 候选股池 的轮询频率,存 config/web.yaml。
+    async loadRefreshConfig(silent = false) {
+      const r = await api("/api/refresh-config");
+      if (r.ok && r.refresh_interval_sec != null) {
+        this.refreshSec = Number(r.refresh_interval_sec);
+        this.restartPolling();
+      } else if (!silent) {
+        this.settingsMsg = "刷新间隔读取失败";
+      }
+    },
+    async saveRefreshConfig() {
+      const sec = Number(this.refreshSec);
+      if (!Number.isInteger(sec) || sec < 1 || sec > 3600) {
+        this.settingsMsg = "刷新间隔需为 1-3600 的整数秒";
+        return;
+      }
+      this.refreshSaving = true;
+      try {
+        const resp = await fetch("/api/refresh-config", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ refresh_interval_sec: sec }),
+        });
+        const r = await resp.json();
+        if (!r.ok) { this.settingsMsg = r.error || "保存失败"; return; }
+        this.refreshSec = Number(r.refresh_interval_sec);
+        this.refreshSaved = new Date().toTimeString().slice(0, 5) + " 已保存(新间隔立即生效)";
+        this.settingsMsg = "刷新间隔已保存";
+        this.restartPolling();
+      } catch (e) { this.settingsMsg = String(e); }
+      finally { this.refreshSaving = false; }
+    },
+    // 轮询:顶部指数 + 候选股池 按 refreshSec 一起刷。暂停界面时也保持(盘中行情需一直最新)。
+    startPolling() {
+      this.stopPolling();
+      const tick = () => {
+        this.loadIndices();
+        this.loadWatchlist();
+      };
+      tick();                                  // 立即刷一轮
+      this._pollTimer = setInterval(tick, this.refreshSec * 1000);
+    },
+    stopPolling() {
+      if (this._pollTimer) { clearInterval(this._pollTimer); this._pollTimer = null; }
+    },
+    restartPolling() {
+      if (!this._started) return;   // mounted 前不启动
+      this.startPolling();
+    },
+
+    // ---- 盘中技术快照(数据快照 + 深入分析,两张卡独立加载,2026-08-22) ----
+    async loadTechSnapshot() {
+      if (!this.techCode) return;
+      this.snapError = "";
+      // 并行发两个请求:数据卡(确定性,毫秒级)先渲染,分析卡(LLM,10-20秒)后渲染。
+      // 两卡完全独立——LLM 失败/幻觉时,数据快照照常展示、不受影响。
+      await Promise.all([this.loadTechFacts(), this.loadTechAnalysis()]);
+    },
+    async loadTechFacts() {
+      this.snapFacts = "";
+      this.snapFactsError = "";
+      this.snapFactsLoading = true;
+      try {
+        const r = await api("/api/snapshot/tech/facts?code=" + this.techCode);
+        if (!r.ok) { this.snapFactsError = r.error || "数据快照失败"; return; }
+        this.snapFacts = r.markdown;
+        this.applyFactsToPanel(this.techCode, r);   // 联动:侧栏按钮同时刷新面板标记
+      } catch (e) { this.snapFactsError = String(e); }
+      finally { this.snapFactsLoading = false; }
+    },
+    async loadTechAnalysis() {
+      this.snapAnalysis = "";
+      this.snapAnalysisError = "";
+      this.snapAnalysisLoading = true;
+      try {
+        const r = await api("/api/snapshot/tech/analysis?code=" + this.techCode);
+        if (!r.ok) { this.snapAnalysisError = r.error || "深入分析失败"; return; }
+        this.snapAnalysis = r.markdown;   // degraded 时 markdown 内已含降级提示
+      } catch (e) { this.snapAnalysisError = String(e); }
+      finally { this.snapAnalysisLoading = false; }
+    },
+    combinedSnapshotMd() {
+      // 推送 = 数据快照(上) + 深入分析(下),中间分隔线;手机端先事实后推理
+      if (!this.snapFacts) return this.snapAnalysis || "";
+      if (!this.snapAnalysis) return this.snapFacts;
+      return this.snapFacts + "\n\n---\n\n" + this.snapAnalysis;
+    },
+    async runCounterfactual() {
+      // 反事实推演(盘后·情景分支,2026-08-26):收盘快照 + 确定性迁移表 → LLM 情景推演。
+      // 手动触发;输出非投资建议(卡3 有显著标注);LLM 失败降级纯迁移表。
+      if (!this.techCode) return;
+      this.cfLoading = true;
+      this.cfError = "";
+      this.cfMarkdown = "";
+      try {
+        const r = await api("/api/snapshot/tech/counterfactual?code=" + this.techCode);
+        if (!r.ok) { this.cfError = r.error || "反事实推演失败"; return; }
+        this.cfMarkdown = r.markdown;
+      } catch (e) { this.cfError = String(e); }
+      finally { this.cfLoading = false; }
+    },
+    // ---- 悬浮面板(里程碑7) ----
+    markerOf(sym) {
+      return this.markers[sym] || null;
+    },
+    markerWord(sym) {
+      // 核心词(行内只显示它):触发档×状态词,确定性字段驱动。
+      // 触发档:现价≥突破加仓→突破;≤回踩加仓→回踩买区;≤砍仓→砍仓线;≤止损→破位·止损。
+      // 未触发 → 沿用信号状态词(蓄势/区间震荡/超跌试多…)。
+      const m = this.markers[sym];
+      if (!m) return "";
+      const w = this.watchlist.find((x) => x.symbol === sym);
+      const price = w && w.snapshot && w.snapshot.last_price;
+      let word = m.status_word || "数据不足";
+      if (price != null && m.anchors) {
+        if (m.anchors["突破加仓"] != null && price >= m.anchors["突破加仓"]) word = "突破";
+        else if (m.anchors["回踩加仓"] != null && price <= m.anchors["回踩加仓"]) word = "回踩买区";
+        else if (m.anchors["砍仓"] != null && price <= m.anchors["砍仓"]) word = "砍仓线";
+        else if (m.anchors["止损"] != null && price <= m.anchors["止损"]) word = "破位·止损";
+      }
+      return word;
+    },
+    markerTitle(sym) {
+      // 完整数据(鼠标悬停显示):核心词 + 距最近档 + 风险 + 更新时间
+      const m = this.markers[sym];
+      if (!m) return "";
+      const w = this.watchlist.find((x) => x.symbol === sym);
+      const price = w && w.snapshot && w.snapshot.last_price;
+      const parts = [this.markerWord(sym)];
+      const dist = this.floatSnapDistance(m, price);
+      if (dist != null) parts.push("距" + dist);
+      if (m.risk && m.risk !== "正常") parts.push("风险 " + m.risk);
+      if (m.updated_at) parts.push("更新 " + m.updated_at);
+      return parts.join(" · ");
+    },
+    markerCls(sym) {
+      // 标记颜色:与核心词同源(含触发档翻转),状态词 → 色彩档;
+      // 风险「关注/升级」叠闪烁;程序确定性字段驱动
+      const m = this.markers[sym];
+      if (!m) return "conc-normal";
+      const word = this.markerWord(sym);
+      const base = {
+        "突破": "conc-near", "右侧初现": "conc-near",
+        "回踩买区": "conc-wait", "回踩": "conc-wait",
+        "蓄势": "conc-normal", "区间震荡": "conc-normal",
+        "超跌试多": "conc-warn", "变盘前兆": "conc-warn",
+        "左侧观望": "conc-normal", "破位退出": "conc-hit",
+        "砍仓线": "conc-hit", "破位·止损": "conc-hit",
+      };
+      const cls = base[word] || "conc-normal";
+      const rk = m.risk === "升级" ? " risk-down" : m.risk === "关注" ? " risk-warn" : "";
+      return cls + rk;
+    },
+    floatSnapDistance(m, price) {
+      // 距最近档:前端用现价 vs anchors 确定性重算(不覆盖 marker 文本)
+      if (price == null || !m.anchors || !Object.keys(m.anchors).length) return null;
+      let best = null, bestName = "";
+      for (const [name, v] of Object.entries(m.anchors)) {
+        if (v == null) continue;
+        const d = Math.abs(price - v) / price * 100;
+        if (best == null || d < best) { best = d; bestName = name; }
+      }
+      return best != null ? `${best.toFixed(1)}%·${bestName}` : null;
+    },
+    async genFloatSnapshot(sym) {
+      // 面板单只刷新:只刷该只,规避 fuyao 批量 429;与「数据快照」卡同源可复核。
+      // 联动:同时刷新侧栏「数据快照」卡并切到该标的,两处保持一致。
+      if (this.refreshCode) return;
+      const prev = this.techCode;
+      this.techCode = sym;
+      this.refreshCode = sym;
+      this.snapError = "";
+      this.snapFacts = "";
+      this.snapFactsError = "";
+      this.snapFactsLoading = true;
+      try {
+        const r = await api("/api/snapshot/tech/facts?code=" + sym);
+        if (r.ok) {
+          this.snapFacts = r.markdown;                 // 侧栏数据快照卡
+          this.applyFactsToPanel(sym, r);              // 面板标记
+        } else {
+          this.snapError = (r.error || "该标的快照失败") + " — 面板该行暂不更新";
+        }
+      } catch (e) {
+        this.snapError = String(e);
+        this.snapFactsError = String(e);
+      } finally {
+        this.snapFactsLoading = false;
+        this.refreshCode = "";
+        this.techCode = prev || sym;
+      }
+    },
+    applyFactsToPanel(sym, r) {
+      // 单一真源落点:把 facts 接口返回的确定性 panel 段写入悬浮面板标记
+      if (r && r.panel) {
+        this.markers = { ...this.markers, [sym]: r.panel };
+        this.markersTime = { ...this.markersTime, [sym]: new Date().toTimeString().slice(0, 5) };
+      }
+    },
+    toggleFloatCol(key) {
+      this.floatCols = { ...this.floatCols, [key]: !this.floatCols[key] };
+      this.persistFloatPrefs();
+    },
+    // 显示偏好存 localStorage:可选列 + 仅持仓过滤(纯显示层,不动数据源)
+    defaultFloatPrefs() {
+      try {
+        const saved = JSON.parse(localStorage.getItem("alphaprism.float") || "{}");
+        if (saved.floatCols) this.floatCols = { ...this.floatCols, ...saved.floatCols };
+        if (typeof saved.floatOnlyHeld === "boolean") this.floatOnlyHeld = saved.floatOnlyHeld;
+      } catch (e) { /* 忽略损坏缓存 */ }
+    },
+    persistFloatPrefs() {
+      try {
+        localStorage.setItem("alphaprism.float", JSON.stringify({
+          floatCols: this.floatCols,
+          floatOnlyHeld: this.floatOnlyHeld,
+        }));
+      } catch (e) { /* 忽略 */ }
+    },
+    fmtSnapVol(snap) {
+      // 成交量:同花顺基金快照 volume 字段(股);列头「量」,亿/万缩写 手=股/100
+      if (!snap || snap.volume == null) return "-";
+      return this.fmtVol(snap.volume / 100);
+    },
+    fmtSnapAmt(snap) {
+      // 成交额:快照 turnover(元) → 亿/万缩写
+      if (!snap || snap.turnover == null) return "-";
+      return this.fmtAmt(snap.turnover);
+    },
+    // 悬浮面板整体拖拽:面板任意区域按下鼠标即可拖动,尺寸不变。
+    // 不用 setPointerCapture(会把随后的 click 重定向到面板,导致行点击失效);
+    // 改为按下时在 document 临时挂 move/up,抬起后卸载——click 的 target 保持原样。
+    // 点击与拖拽用 4px 阈值区分:未移动=正常点击(行选择/按钮),移动了=拖拽并抑制随后的 click。
+    initFloatDrag() {
+      const panel = document.getElementById("floatPanel");
+      if (!panel) return;
+      let dragging = false, moved = false;
+      let startX = 0, startY = 0, origLeft = 0, origTop = 0;
+      const isInteractive = (t) => !!(t && t.closest && t.closest("button, input, label, a"));
+      const onDown = (e) => {
+        // 交互控件(⟳/列toggle/仅持仓)不启动拖拽;非鼠标主键忽略
+        if (isInteractive(e.target)) return;
+        if (e.button != null && e.button !== 0) return;
+        // 触屏在 .f-body 内让位给列表滚动;鼠标任意区域均可拖
+        if (e.pointerType === "touch" && e.target.closest && e.target.closest(".f-body")) return;
+        dragging = true;
+        moved = false;
+        const r = panel.getBoundingClientRect();
+        startX = e.clientX; startY = e.clientY;
+        origLeft = r.left; origTop = r.top;
+        document.addEventListener("pointermove", onMove);
+        document.addEventListener("pointerup", onUp);
+        document.addEventListener("pointercancel", onUp);
+      };
+      const onMove = (e) => {
+        if (!dragging) return;
+        const dx = e.clientX - startX, dy = e.clientY - startY;
+        if (!moved && Math.hypot(dx, dy) < 4) return;   // 阈值内视为点击,不拖
+        moved = true;
+        panel.classList.add("dragging");
+        // 关键修复:清除 right/bottom 双锚,只留 left/top → 高度回到内容自适应,不再拉伸
+        panel.style.right = "auto";
+        panel.style.bottom = "auto";
+        panel.style.left = Math.max(0, origLeft + dx) + "px";
+        panel.style.top = Math.max(0, origTop + dy) + "px";
+        if (e.cancelable) e.preventDefault();
+      };
+      const onUp = () => {
+        document.removeEventListener("pointermove", onMove);
+        document.removeEventListener("pointerup", onUp);
+        document.removeEventListener("pointercancel", onUp);
+        if (dragging && moved) {
+          // 拖拽结束:抑制本次 click,避免误触行选择/按钮
+          const suppress = (ev) => {
+            ev.stopPropagation();
+            ev.preventDefault();
+            panel.removeEventListener("click", suppress, true);
+          };
+          panel.addEventListener("click", suppress, true);
+        }
+        dragging = false;
+        panel.classList.remove("dragging");
+      };
+      panel.addEventListener("pointerdown", onDown);
+    },
+    // 推送到手机:当前版本已移除 UI 入口(index.html),本方法与 /api/snapshot/push
+    // 保留待更高版本恢复;combinedSnapshotMd 供未来导出/推送复用。
     async pushSnapshot() {
-      if (!this.snapMd) return;
+      const md = this.combinedSnapshotMd();
+      if (!md) return;
       this.snapPushing = true;
       this.snapError = "";
       try {
         const resp = await fetch("/api/snapshot/push", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ markdown: this.snapMd }),
+          body: JSON.stringify({ markdown: md }),
         });
         const r = await resp.json();
         if (!r.ok) { this.snapError = r.error || "推送失败"; return; }
@@ -341,6 +1123,7 @@ const app = createApp({
       for (const raw of lines) {
         const s = raw.trim();
         if (!s) { flushTable(); flushList(); continue; }
+        if (/^```/.test(s)) { flushTable(); flushList(); continue; }   // ```markdown 围栏行跳过,内容按正文渲染
         if (s.startsWith("|") && s.endsWith("|")) {
           const cells = s.replace(/^\||\|$/g, "").split("|").map((c) => inline(c.trim()));
           if (cells.every((c) => /^:?-+:?$/.test(c))) continue;   // 分隔行
@@ -376,53 +1159,48 @@ const app = createApp({
       const rows = r.rows || [];
       if (r.period === "min") return this.renderMinute(r, rows);
 
-      // ---- 日K / 30分K: 蜡烛图 + 均线 + 关键位线(可点图例隐藏) + 成交量 ----
+      // ---- 日K / 30分K: 蜡烛图 + 均线 + 成交量(MVP:作战地图隐藏,不再画关键位线) ----
       const x = rows.map((x) => x.t);
       const kData = rows.map((x) => [x.o, x.c, x.l, x.h]);
       const vol = rows.map((x) => x.v || 0);
       const isDay = r.period === "day";
       const maPeriods = isDay ? [5, 10, 20, 60, 120, 250] : [5, 10, 20, 60];
       const closeArr = rows.map((x) => x.c);
-      const levelLines = this.levelLines;   // 计算属性(属性访问,非方法)
       const n = rows.length;
 
-      // 均线:endLabel 在右端标注"MA120 0.617";图例可点选隐藏/显示
+      // 均线:数值并入顶部图例(右端 endLabel 已移除,保持图区干净)
+      const maLast = {};
       const maSeries = maPeriods.map((p) => {
         const data = this.ma(closeArr, p);
-        const last = data[n - 1];
+        maLast[p] = data[n - 1];
         return {
           name: "MA" + p, type: "line", data: data, smooth: true,
           showSymbol: false, xAxisIndex: 0, yAxisIndex: 0,
           lineStyle: { width: 1, type: p >= 120 ? "dashed" : "solid", color: this.maColor(p) },
           itemStyle: { color: this.maColor(p) }, emphasis: { disabled: true }, z: 3,
-          endLabel: { show: true, formatter: "MA" + p + " " + (last == null ? "-" : last.toFixed(3)),
-                      color: this.maColor(p), fontSize: 10, distance: 4 },
         };
       });
 
-      // 关键位线:恒值 line series(不用 markLine——markLine+dataZoom 在 ECharts5 有 bug 会卡死滑动条)。
-      // 每条独立 series → 图例可点选隐藏;endLabel 标注"生命线 0.778"。
-      const levelSeries = levelLines.map((l) => ({
-        name: l.name, type: "line", data: Array(n).fill(l.value),
-        showSymbol: false, silent: true, xAxisIndex: 0, yAxisIndex: 0,
-        lineStyle: { width: 1, type: l.type, color: l.color, opacity: 0.9 },
-        itemStyle: { color: l.color }, emphasis: { disabled: true }, z: 2,
-        endLabel: { show: true, formatter: l.name + " " + l.value.toFixed(3), color: l.color, fontSize: 10, distance: 4 },
-      }));
-
-      const legendData = [...maPeriods.map((p) => "MA" + p), ...levelLines.map((l) => l.name)];
       const legendSelected = {};
       maPeriods.forEach((p) => { legendSelected["MA" + p] = p < 250; });  // 默认隐藏 MA250 减噪
-      levelLines.forEach((l) => { legendSelected[l.name] = true; });
       const option = {
         backgroundColor: "transparent", animation: false,
         tooltip: { trigger: "axis", axisPointer: { type: "cross" } },
-        legend: { data: legendData, top: 0, left: 0, selectedMode: "multiple",
-                  textStyle: { color: "#787b86", fontSize: 10 }, itemWidth: 12, itemHeight: 8, itemGap: 6,
-                  selected: legendSelected },
+        // 图例一行:均线+数值(关键位线已随作战地图视图隐藏而移除)
+        legend: [
+          { data: maPeriods.map((p) => "MA" + p), top: 0, left: 0, selectedMode: "multiple",
+            textStyle: { color: "#787b86", fontSize: 10 }, itemWidth: 12, itemHeight: 8, itemGap: 6,
+            selected: legendSelected,
+            formatter: (name) => {
+              const p = Number(name.slice(2));
+              const v = maLast[p];
+              return "MA" + p + ": " + (v == null ? "-" : v.toFixed(3));
+            } },
+        ],
         axisPointer: { link: [{ xAxisIndex: "all" }] },
         grid: [
-          { left: 58, right: 18, top: 22, height: "52%" },
+          // 主图顶部留白:图例两行约占 0-32px,主图从 64px 起,拉开明显距离
+          { left: 58, right: 18, top: 64, height: "52%" },
           { left: 58, right: 18, top: "78%", height: "15%" },
         ],
         xAxis: [
@@ -431,16 +1209,23 @@ const app = createApp({
         ],
         yAxis: [
           { scale: true, gridIndex: 0, axisLabel: { color: "#787b86", fontSize: 10 }, splitLine: { lineStyle: { color: "#1b2130" } } },
-          { gridIndex: 1, axisLabel: { color: "#787b86", fontSize: 10, formatter: (v) => this.fmtVol(v) }, splitLine: { show: false } },
+          { gridIndex: 1, axisLabel: { show: false }, axisLine: { show: false }, splitLine: { show: false } },
         ],
         dataZoom: [
-          { type: "slider", xAxisIndex: [0], start: 55, end: 100, bottom: 0, height: 14, borderColor: "#232a38", fillerColor: "rgba(76,141,255,0.1)" },
+          { type: "slider", xAxisIndex: [0, 1], start: 55, end: 100, bottom: 0, height: 14,
+            borderColor: "#232a38", fillerColor: "rgba(76,141,255,0.1)",
+            // 主副图 X 轴联动:xAxisIndex [0,1] 让 K线+成交量一起平移缩放,垂直光标对齐
+            // 彻底清除滑块浅色残留:数据阴影(含选中区强调态)、中央拖动白线;两端手柄改深色
+            dataBackground: { show: false, lineStyle: { color: "transparent" }, areaStyle: { color: "transparent" },
+                              emphasis: { lineStyle: { color: "transparent" }, areaStyle: { color: "transparent" } } },
+            moveHandleStyle: { color: "transparent" },
+            emphasis: { moveHandleStyle: { color: "transparent" } },
+            handleStyle: { color: "#232a38", borderColor: "#787b86" } },
         ],
         series: [
           { name: "K线", type: "candlestick", data: kData, xAxisIndex: 0, yAxisIndex: 0,
             itemStyle: { color: "#f23645", color0: "#089981", borderColor: "#f23645", borderColor0: "#089981" }, z: 3 },
           ...maSeries,
-          ...levelSeries,
           { name: "成交量", type: "bar", data: vol, xAxisIndex: 1, yAxisIndex: 1,
             itemStyle: { color: (p) => (p.dataIndex > 0 && rows[p.dataIndex].c < rows[p.dataIndex - 1].c ? "#089981" : "#f23645") } },
           { name: "MA5量", type: "line", data: this.ma(vol, 5), xAxisIndex: 1, yAxisIndex: 1,
@@ -467,6 +1252,7 @@ const app = createApp({
       }
     },
     renderMinute(r, rows) {
+      const x = rows.map((x) => x.t);   // 修复:分时 x 轴此前未定义(切分时会抛 ReferenceError)
       const price = rows.map((x) => x.p);
       const vol = rows.map((x) => x.v);
       const option = {
@@ -483,11 +1269,17 @@ const app = createApp({
         ],
         yAxis: [
           { scale: true, gridIndex: 0, axisLabel: { color: "#787b86", fontSize: 10 }, splitLine: { lineStyle: { color: "#1b2130" } } },
-          { gridIndex: 1, axisLabel: { color: "#787b86", fontSize: 10, formatter: (v) => this.fmtVol(v) }, splitLine: { show: false } },
+          { gridIndex: 1, axisLabel: { show: false }, axisLine: { show: false }, splitLine: { show: false } },
         ],
         dataZoom: [
           { type: "inside", xAxisIndex: [0, 1], start: 0, end: 100 },
-          { type: "slider", xAxisIndex: [0, 1], bottom: 0, height: 14, borderColor: "#232a38", fillerColor: "rgba(76,141,255,0.1)" },
+          { type: "slider", xAxisIndex: [0, 1], bottom: 0, height: 14,
+            borderColor: "#232a38", fillerColor: "rgba(85,167,149,0.12)",
+            dataBackground: { show: false, lineStyle: { color: "transparent" }, areaStyle: { color: "transparent" },
+                              emphasis: { lineStyle: { color: "transparent" }, areaStyle: { color: "transparent" } } },
+            moveHandleStyle: { color: "transparent" },
+            emphasis: { moveHandleStyle: { color: "transparent" } },
+            handleStyle: { color: "#232a38", borderColor: "#232a38" } },
         ],
         series: [
           { name: "价格", type: "line", data: price, xAxisIndex: 0, yAxisIndex: 0,
@@ -506,6 +1298,7 @@ const app = createApp({
       return {
         silent: true,
         symbol: "none",
+        label: { show: false },   // 关闭均价线端点数值标签(此前挤出图表右侧被截断)
         data: [{ yAxis: last && last.avg != null ? last.avg : undefined, name: "均价" }],
         lineStyle: { color: "#e8b339", type: "dashed" },
       };
@@ -522,15 +1315,6 @@ const app = createApp({
       } finally {
         this.closeLoading = false;
       }
-    },
-
-    // ---- 盘中核对(里程碑3) ----
-    async loadCheck() {
-      this.checkError = "";
-      const r = await api("/api/check");
-      if (!r.ok) { this.checkError = r.error || "核对失败"; return; }
-      this.checkGate = r.gate;
-      this.checkVerdicts = r.verdicts || [];
     },
 
     // ---- 作战地图 ----
@@ -586,9 +1370,9 @@ const app = createApp({
         const r = await api("/api/morning");
         if (!r.ok) { this.mgError = r.error || "盘前视图生成失败"; return; }
         this.mgNews = r.news || null;
+        this.mgHealth = r.news_health || null;
         this.mgPlaybook = r.playbook || [];
         this.mgDiscipline = r.discipline || [];
-        this.mgTime = new Date().toLocaleTimeString("zh-CN", { hour: "2-digit", minute: "2-digit" });
       } finally {
         this.mgLoading = false;
       }
@@ -601,6 +1385,9 @@ const app = createApp({
     },
     impactTag(impact) {
       return impact === "利好" ? "🔴" : impact === "利空" ? "🟢" : "⚪";
+    },
+    gradeTag(g) {
+      return { 官方: "官", 媒体: "媒", 快讯: "快", 传闻: "闻" }[g] || g;
     },
     async saveMorningPlaybook() {
       if (!this.mgPlaybook.length) return;
@@ -624,6 +1411,34 @@ const app = createApp({
         this.pbSaving = false;
       }
     },
+    // ---- 信息层评估(M6) ----
+    async loadNewsStats() {
+      const r = await api("/api/news/stats");
+      if (r.ok) this.infoStats = r;
+      this.$nextTick(() => this.renderInfoChart());
+    },
+    renderInfoChart() {
+      const el = this.$refs.infoChartEl;
+      if (!el) return;
+      if (!this.infoChart) {
+        this.infoChart = echarts.init(el);
+        window.addEventListener("resize", () => this.infoChart && this.infoChart.resize());
+      }
+      const curve = this.infoStats?.stats20?.alpha_curve || [];
+      this.infoChart.setOption({
+        backgroundColor: "transparent", animation: false,
+        tooltip: { trigger: "axis" },
+        grid: { left: 50, right: 16, top: 30, bottom: 30 },
+        xAxis: { type: "category", data: curve.map((e) => e[0]),
+                 axisLabel: { color: "#787b86", fontSize: 10 }, axisLine: { lineStyle: { color: "#232a38" } } },
+        yAxis: { type: "value", scale: true, axisLabel: { color: "#787b86", fontSize: 10 },
+                 splitLine: { lineStyle: { color: "#1b2130" } } },
+        series: [{ name: "信息层 alpha 累计", type: "line", data: curve.map((e) => e[1]),
+                  showSymbol: false, lineStyle: { width: 2, color: "#4c8dff" },
+                  itemStyle: { color: "#4c8dff" } }],
+      }, true);
+    },
+
     // ---- 回测 ----
     initBtChart() {
       this.$nextTick(() => {
@@ -667,15 +1482,28 @@ const app = createApp({
     },
   },
 
+  watch: {
+    // 悬浮面板显示偏好(可选列 + 仅持仓)变更即持久化到 localStorage
+    floatCols: { deep: true, handler() { this.persistFloatPrefs(); } },
+    floatOnlyHeld() { this.persistFloatPrefs(); },
+  },
+
   async mounted() {
     // 图表在 renderChart 里按需初始化(数据就绪、容器尺寸已定后再 echarts.init,避免
     // 提前 init 导致 dataZoom 状态损坏——见 renderChart 注释)
+    this._started = true;
     this.loadIndices();
     this.loadWatchlist();
     this.loadBattlemap();
-    this.loadCheck();
-    this.loadMorning();
-    setInterval(() => this.loadIndices(), 60000);
+    this.loadSettings();       // 内含 loadRefreshConfig → 按配置启动轮询(指数+候选池)
+    this.defaultFloatPrefs();
+    this.$nextTick(() => this.initFloatDrag());
+    // 设置弹窗:按 Esc 关闭(与 X 按钮 / 点击遮罩 三路等效)
+    document.addEventListener("keydown", (e) => {
+      if (e.key === "Escape" && this.settingsOpen) this.closeSettings();
+    });
+    // 定时轮询由 loadSettings→loadRefreshConfig 依 web.yaml 的 refresh_interval_sec 启动
+    // (默认 12s,顶部指数 + 候选股池一起刷;旧式固定 60s 仅刷指数的写法已移除)。
   },
 });
 

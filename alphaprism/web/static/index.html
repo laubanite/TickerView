@@ -5,8 +5,10 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>AlphaPrism 行情页</title>
 <link rel="stylesheet" href="/static/style.css">
-<script src="https://unpkg.com/vue@3/dist/vue.global.prod.js"></script>
-<script src="https://cdn.jsdelivr.net/npm/echarts@5/dist/echarts.min.js"></script>
+<!-- 本地 vendor:Vue3 + ECharts 已随仓库内置(CDN 常被墙/不可达导致整页模板未渲染,
+     故改为本地静态引用,离线/内网也能用) -->
+<script src="/static/vendor/vue.global.prod.js"></script>
+<script src="/static/vendor/echarts.min.js"></script>
 </head>
 <body>
 
@@ -20,8 +22,11 @@
       <button :class="{on: tab==='ph'}" @click="setTab('ph')">盘后</button>
     </nav>
     <div class="hdr-actions">
-      <button :class="{on: view==='map'}" @click="toggleView('map')">作战地图</button>
+      <button :class="{on: settingsOpen}" @click="openSettings" title="设置 (Esc 关闭)">设置</button>
+      <!-- MVP:信息层/回测/作战地图入口隐藏,代码保留(高版本恢复)。后端任务(playbook/backtest/morning_verify)不受影响。 -->
+      <!--button :class="{on: view==='map'}" @click="toggleView('map')">作战地图</button>
       <button :class="{on: view==='bt'}" @click="toggleView('bt')">回测</button>
+      <button :class="{on: view==='info'}" @click="toggleView('info')">信息层</button-->
     </div>
   </header>
 
@@ -38,27 +43,28 @@
   <main v-if="!view">
     <div class="left">
       <div class="card">
-        <h3>自选股 · 计划核对 <span class="dim">速查表驱动 · 点击切换图表</span></h3>
-        <div style="display:flex;gap:6px;margin:6px 0">
-          <input v-model="newSym" placeholder="输入代码添加" style="flex:1;background:#12151d;color:#d1d4dc;border:1px solid #232a38;border-radius:6px;padding:5px 8px">
-          <button class="btn" @click="addSymbol" style="padding:5px 14px">＋ 添加</button>
+        <h3>自选股 <span class="dim">速查表驱动 · 点击切换图表</span></h3>
+        <div class="add-row">
+          <input class="ctl" v-model="newSym" placeholder="输入代码添加" @keyup.enter="addSymbol">
+          <button class="btn" @click="addSymbol">＋ 添加</button>
         </div>
-        <div v-if="wlMsg" class="dim" style="font-size:11px;margin-bottom:4px">{{wlMsg}}</div>
-        <div v-if="wlError" class="error" style="margin-bottom:4px">{{wlError}}</div>
+        <div v-if="wlMsg" class="dim err-line" style="font-size:11px;margin-bottom:4px">
+          <span>{{wlMsg}}</span><button class="icon-btn" style="transform:scale(.7)" @click="wlMsg=''">✕</button>
+        </div>
+        <div v-if="wlError" class="error err-line" style="margin-bottom:4px">
+          <span>{{wlError}}</span><button class="icon-btn" style="transform:scale(.7)" @click="wlError=''">✕</button>
+        </div>
         <table class="wl">
-          <thead><tr><th>标的</th><th>现价</th><th>涨跌</th><th>换手</th><th>状态</th><th></th></tr></thead>
+          <thead><tr><th style="width:26px">持</th><th>标的</th><th>现价</th><th>涨跌</th><th>换手</th><th></th></tr></thead>
           <tbody>
             <tr v-for="w in watchlist" :key="w.symbol"
                 :class="{selectable:true, sel: w.symbol===current}"
                 @click="select(w.symbol)">
+              <td><span v-if="holdingOf(w.symbol)" class="tag t-hold" title="持仓">持</span></td>
               <td class="nm">{{shortName(w.name)}}</td>
               <td class="px" :class="pxCls(snapChg(w.snapshot))">{{fmtQuote(w.snapshot)}}</td>
               <td :class="pxCls(snapChg(w.snapshot))">{{pct(snapChg(w.snapshot))}}</td>
               <td>{{volRatio(w.snapshot)}}</td>
-              <td>
-                <span v-if="hasPlan(w.symbol)" class="tag t-ok">计划内</span>
-                <span v-else class="tag t-normal">无计划</span>
-              </td>
               <td><button class="btn mini" @click.stop="removeSymbol(w.symbol)">✕</button></td>
             </tr>
           </tbody>
@@ -88,108 +94,155 @@
           <span>5日均量 {{fmtVol(quoteMetrics.ma5v)}}手</span>
           <span>10日均量 {{fmtVol(quoteMetrics.ma10v)}}手</span>
         </div>
-        <div class="cwrap" ref="chartEl" style="height:430px"></div>
+        <div class="cwrap" ref="chartEl" style="height:470px"></div>
       </div>
     </div>
 
     <div class="right">
-      <!-- 盘前 -->
-      <div class="card side" :class="{on: tab==='pm'}">
-        <h3>盘前 <span class="dim">隔夜消息 + 剧本 + 预案 + 纪律 + 持仓卡</span></h3>
-        <div style="display:flex;gap:8px;margin:6px 0;align-items:center">
-          <button class="btn" @click="loadMorning" :disabled="mgLoading" style="margin:0">🔄 刷新盘前</button>
-          <span v-if="mgTime" class="dim" style="font-size:11px">{{mgTime}} 更新</span>
-          <span v-if="mgLoading" class="dim" style="font-size:11px">抓取新闻 + LLM 提取中(约 10-20 秒)…</span>
+      <!-- 持仓上下文卡:选中持仓标的时显示(策略 §7 持仓/现金输入 的 UI 落点) -->
+      <div class="card holding-ctx" v-if="holdingOf(current)">
+        <h3>持仓上下文 <span class="dim">{{holdingOf(current).name || current}}</span></h3>
+        <div class="dim" style="font-size:12px;line-height:1.8">
+          成本 <b>{{fmtPrice3(holdingOf(current).cost)}}</b> × {{holdingOf(current).quantity}} 股
+          · 盈亏 <b :class="pxCls(holdPnL(current))">{{pct(holdPnL(current))}}</b>
+          · 状态 {{holdingOf(current).status}}
         </div>
+      </div>
+
+      <!-- 盘前:仅 隔夜重要消息 + 盘前预案 两块(各自独立圆角框,始终可见) -->
+      <!-- pm-flow:盘前板块解除内部滚动,内容按文档流自然撑开,跟随主滚动条(见 7.x 样式) -->
+      <div class="card side pm-flow" :class="{on: tab==='pm'}">
         <div v-if="mgError" class="error">{{mgError}}</div>
 
-        <!-- ① 隔夜重要消息(新浪+东财 实时 + LLM 提取/分类) -->
-        <div v-if="mgNews" style="margin-top:4px">
-          <h3>隔夜重要消息 <span class="dim">新浪+东财 · LLM 提取</span></h3>
-          <div v-if="mgNews.summary" class="shot" style="margin-top:6px">{{mgNews.summary}}</div>
-          <div v-for="(n,i) in mgNews.items" :key="i" class="nw" :class="newsCls(n.impact)">
-            <span>{{impactTag(n.impact)}}</span>
-            <span class="dim" style="font-size:11px">{{n.time}}</span>
-            <b v-if="n.sector" class="dim" style="font-size:11px">[{{n.sector}}]</b>
-            <span v-if="n.source" class="tag t-normal" style="font-size:10px">{{n.source}}</span>
-            {{n.text}}
-            <div class="dim" style="font-size:11px;margin-top:2px" v-if="n.reason">{{n.reason}}</div>
+        <!-- ① 隔夜重要消息 -->
+        <div class="sub-card pm-news">
+          <h3><span>隔夜重要消息</span>
+            <span class="dim" style="font-size:11px">新浪+东财 · LLM 提取</span>
+            <span v-if="mgHealthText" class="dim" style="font-size:11px">· {{mgHealthText}}</span>
+            <span style="flex:1"></span>
+            <button class="icon-btn" @click="loadMorning" :disabled="mgLoading" title="刷新盘前">
+              <svg class="icon" viewBox="0 0 1024 1024" xmlns="http://www.w3.org/2000/svg" width="15" height="15"><path d="M435.126613 213.864107c-72.799573 13.689173-136.58624 48.523947-182.582613 96.805546-47.080107 49.419947-75.42784 113.012053-75.42784 182.319787v18.06336H39.65952l205.7728 302.967467h0.725333l205.77792-302.967467h-135.04512l-1.005226-17.005227c-0.160427-2.727253-0.303787-6.038187-0.421547-9.965226-0.141653-4.696747-0.216747-8.050347-0.216747-9.95328 0-52.471467 12.337493-102.505813 34.604374-147.97824 20.575573-42.016427 49.640107-80.00512 85.275306-112.28672z m-208.687786 71.970133c53.684907-56.352427 128.984747-96.165547 214.580906-109.489493 6.81472-1.061547 13.568-0.36352 19.478187 1.810773 6.529707 2.397867 12.229973 6.6304 16.242347 12.368213 4.621653 6.60992 6.25664 14.066347 5.067093 21.398187-1.128107 6.956373-4.804267 13.426347-10.868053 18.476373-37.643947 31.327573-68.043093 69.2224-88.773974 111.556267-19.8144 40.461653-30.79168 85.1456-30.79168 132.174507v0.797013h105.05216c5.80608 0 11.40736 1.322667 16.457387 3.800747 5.317973 2.6112 9.837227 6.478507 13.18912 11.4176 3.677867 5.41696 5.522773 11.332267 5.522773 17.3312 0 5.993813-1.8432 11.912533-5.522773 17.334613L275.44064 834.92352c-3.351893 4.939093-7.871147 8.8064-13.18912 11.4176-5.050027 2.47808-10.6496 3.800747-16.452267 3.800747-5.807787 0-11.409067-1.322667-16.457386-3.800747-5.31456-2.609493-9.83552-6.475093-13.192534-11.4176L5.522773 524.81024c-3.682987-5.42208-5.522773-11.3408-5.522773-17.334613 0-5.998933 1.841493-11.91424 5.522773-17.3312 3.355307-4.9408 7.872853-8.8064 13.190827-11.4176 5.04832-2.47808 10.6496-3.800747 16.45568-3.800747h106.385067c4.49536-71.86432 35.643733-137.40544 84.88448-189.09184z"/><path d="M595.3536 812.06784c72.79616-13.687467 136.58112-48.52224 182.57408-96.802133 47.080107-49.419947 75.426133-113.012053 75.426133-182.319787v-18.06336h137.460054l-205.7728-302.967467h-0.728747l-205.7728 302.967467h135.033173l1.01376 17.005227c0.162133 2.747733 0.305493 6.058667 0.421547 9.965226 0.141653 4.696747 0.216747 8.052053 0.216747 9.954987 0 52.46976-12.337493 102.504107-34.604374 147.97824-20.573867 42.013013-49.636693 80.003413-85.266773 112.2816zM804.032853 740.10112c-53.6832 56.352427-128.981333 96.165547-214.577493 109.487787-6.81472 1.05984-13.566293 0.361813-19.478187-1.810774-6.524587-2.397867-12.229973-6.626987-16.242346-12.366506-4.61824-6.60992-6.258347-14.068053-5.0688-21.399894 1.128107-6.95808 4.804267-13.42464 10.86976-18.47296 37.640533-31.32416 68.03968-69.2224 88.77056-111.556266 19.812693-40.46336 30.79168-85.1456 30.79168-132.174507v-0.79872h-105.050454c-5.804373 0-11.405653-1.322667-16.45568-3.800747-5.31456-2.60608-9.833813-6.473387-13.190826-11.415893-3.677867-5.41696-5.522773-11.332267-5.522774-17.3312 0-5.99552 1.8432-11.910827 5.522774-17.332907l210.629973-310.1184c3.3536-4.939093 7.877973-8.8064 13.190827-11.415893 5.046613-2.47808 10.647893-3.800747 16.453973-3.800747 5.80608 0 11.40736 1.322667 16.45568 3.800747 5.316267 2.607787 9.833813 6.473387 13.190827 11.415893l210.629973 310.1184c3.682987 5.42208 5.522773 11.337387 5.522773 17.332907 0 5.998933-1.841493 11.91424-5.522773 17.3312-3.35872 4.944213-7.877973 8.81152-13.192533 11.415893-5.044907 2.47808-10.646187 3.800747-16.45568 3.800747h-106.38848c-4.49536 71.86432-35.642027 137.40544-84.882774 189.09184z"/></svg>
+            </button>
+          </h3>
+          <div class="scrolly">
+          <div v-if="mgLoading" class="dim" style="font-size:11px;margin-top:4px"><span class="spinner-dot"></span> 抓取新闻 + LLM 提取中(约 10-20 秒)…</div>
+          <template v-if="mgNews">
+            <div v-if="mgNews.summary" class="shot" style="margin-top:6px">{{mgNews.summary}}</div>
+            <div v-if="mgNews.items.length === 0" class="empty">
+              <svg class="e-ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M4 4h12a2 2 0 0 1 2 2v12a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V4z"/><path d="M18 8h2a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2"/><line x1="7" y1="8" x2="13" y2="8"/><line x1="7" y1="12" x2="13" y2="12"/><line x1="7" y1="16" x2="13" y2="16"/></svg>
+              <div class="e-t">暂无隔夜重要消息</div><div class="e-h">{{newsEmptyText}}</div>
+            </div>
+            <template v-else>
+              <div v-for="(n,i) in mgNewsMerged" :key="i" class="nw" :class="newsCls(n.impact)">
+                <span>{{impactTag(n.impact)}}</span>
+                <span class="dim" style="font-size:11px">{{n.time}}</span>
+                <b v-if="n.sector" class="dim" style="font-size:11px">[{{n.sector}}]</b>
+                <span v-if="n.source" class="tag t-normal" style="font-size:10px">{{n.source}}</span>
+                <span v-if="n.source_grade" class="tag t-normal" style="font-size:10px">{{gradeTag(n.source_grade)}}</span>
+                <span v-if="n.cross > 1" class="tag t-warn" style="font-size:10px">×{{n.cross}}源</span>
+                <span v-if="n.confidence" class="dim" style="font-size:10px">{{n.confidence}}置信</span>
+                {{n.text}}
+                <div class="dim" style="font-size:11px;margin-top:2px" v-if="n.reason">{{n.reason}}</div>
+              </div>
+            </template>
+          </template>
+          <template v-else>
+            <div v-if="mgLoading" class="skeleton"></div>
+            <div v-else class="empty">
+              <svg class="e-ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M4 4h12a2 2 0 0 1 2 2v12a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V4z"/><path d="M18 8h2a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2"/><line x1="7" y1="8" x2="13" y2="8"/><line x1="7" y1="12" x2="13" y2="12"/><line x1="7" y1="16" x2="13" y2="16"/></svg>
+              <div class="e-t">还没有隔夜消息</div><div class="e-h">点击右上角刷新按钮,抓取新浪+东财新闻并用 LLM 提炼今日隔夜重要消息。</div>
+            </div>
+          </template>
           </div>
         </div>
 
-        <!-- ② 今日剧本(消息面催化 → 隔夜影响/今日动作,唯一可编辑真源,可写入作战地图) -->
-        <div v-if="mgPlaybook.length" style="margin-top:12px;border-top:1px solid #1b2130;padding-top:8px">
-          <h3>今日剧本 <span class="dim">消息面催化 → 若…则…</span></h3>
-          <table class="mk" style="margin-top:6px">
+        <!-- ② 盘前预案(纯文本扁平表格,不可编辑) -->
+        <div class="sub-card">
+          <h3>盘前预案 <span class="dim">消息面催化 · {{todayStr}}</span></h3>
+          <div class="scrolly">
+          <table class="flat-tbl" v-if="mgPlaybook.length" style="margin-top:4px">
             <thead><tr><th>品种</th><th>隔夜影响</th><th>今日动作</th></tr></thead>
             <tbody>
               <tr v-for="(r,i) in mgPlaybook" :key="'b'+i">
                 <td class="nm">{{shortName(r.name)||r.name}} {{r.code}}</td>
-                <td><textarea v-model="r.overnight" rows="2" style="width:100%"></textarea></td>
-                <td><textarea v-model="r.action" rows="3" style="width:100%"></textarea></td>
+                <td>{{r.overnight}}</td>
+                <td>{{r.action}}</td>
               </tr>
             </tbody>
           </table>
-          <button class="btn primary" @click="saveMorningPlaybook" :disabled="pbSaving">保存写入作战地图</button>
+          <div v-else-if="mgLoading" class="skeleton"></div>
+          <div v-else class="empty">
+            <svg class="e-ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M9 5h6"/><path d="M9 12h6"/><path d="M9 19h6"/><path d="M4 5h.01"/><path d="M4 12h.01"/><path d="M4 19h.01"/></svg>
+            <div class="e-t">暂无盘前预案</div><div class="e-h">生成隔夜消息后,这里会自动整理今日关注品种的隔夜影响与动作。</div>
+          </div>
+          </div>
+          <!-- 保存写入作战地图:作战地图视图已随 MVP 隐藏,入口一并移除(高版本恢复)。
+          <button class="btn primary" @click="saveMorningPlaybook" :disabled="pbSaving" v-if="mgPlaybook.length">保存写入作战地图</button>
           <span v-if="mgSaved" class="tag t-ok" style="margin-left:6px">{{mgSaved}}</span>
-        </div>
-
-        <!-- ③ 今日纪律(消息面催化驱动,非照搬作战地图) + 持仓卡 -->
-        <div v-if="battlemap" style="margin-top:12px;border-top:1px solid #1b2130;padding-top:8px">
-          <h3>今日纪律 <span class="dim">结合隔夜消息催化</span></h3>
-          <ul class="disc"><li v-for="(d,i) in discipline" :key="i" v-html="mdToHtml(d)"></li></ul>
-          <h3 style="margin-top:12px">持仓卡</h3>
-          <table class="mk">
-            <thead><tr><th>标的</th><th>成本</th><th>现价</th><th>浮亏</th><th>解套需涨</th></tr></thead>
-            <tbody>
-              <tr v-for="p in positions" :key="p.code">
-                <td>{{p.name}}</td>
-                <td>{{p.cost}}</td>
-                <td>{{p.price}}</td>
-                <td :class="pxCls(p.loss_pct)">{{p.loss_pct!=null ? p.loss_pct+'%' : '-'}}</td>
-                <td>{{p.recover_need_pct!=null ? p.recover_need_pct+'%' : '-'}}</td>
-              </tr>
-            </tbody>
-          </table>
+          -->
         </div>
       </div>
 
       <!-- 盘中 -->
       <div class="card side" :class="{on: tab==='pz'}">
-        <h3>盘中实时核对 <span class="dim">速查表 × 实时行情</span></h3>
-        <div v-if="checkGate" class="gate-bar">
-          <span class="tag" :class="checkGate.open ? 't-ok' : 't-hit'">
-            {{checkGate.open ? '门控开放' : '门控关闭·不加仓'}}
-          </span>
-          <span class="dim" style="font-size:11px">
-            J={{checkGate.j}} (截至 {{checkGate.date}} 收盘) · {{checkGate.rule || '—'}}
-          </span>
+        <h3>盘中快照 <span class="dim">大盘 + 选中标的</span></h3>
+        <div v-if="watchlist.length" class="tech-syms">
+          <button v-for="w in watchlist" :key="w.symbol"
+                  class="chip" :class="{on: techCode===w.symbol}"
+                  @click="techCode = w.symbol">{{shortName(w.name)}}</button>
         </div>
-        <div v-if="checkError" class="error">{{checkError}}</div>
-        <table class="mk" style="margin-top:8px">
-          <thead><tr><th>标的</th><th>现价</th><th>涨跌</th><th>量能</th><th>结论</th></tr></thead>
-          <tbody>
-            <tr v-for="v in checkVerdicts" :key="v.code">
-              <td>{{shortName(v.name)}}</td>
-              <td>{{fmt(v.price,3)}}</td>
-              <td :class="pxCls(v.change_pct)">{{pct(v.change_pct)}}</td>
-              <td>{{v.vol_label || '-'}}</td>
-              <td>
-                <span class="tag" :class="v.style">{{v.conclusion}}</span>
-                <span class="dim" v-if="v.near" style="font-size:11px"> {{v.near}}</span>
-              </td>
-            </tr>
-          </tbody>
-        </table>
-        <button class="btn" @click="loadCheck">⟳ 刷新核对</button>
-        <div style="margin-top:10px;border-top:1px solid #1b2130;padding-top:8px">
-          <h3 style="margin-bottom:6px">盘中快照 <span class="dim">差异输出 · 规则事实 + LLM 解读</span></h3>
-          <div v-if="snapError" class="error">{{snapError}}</div>
-          <div v-if="snapLoading" class="loading">生成中(实时行情 + LLM 解读)…</div>
-          <div v-if="snapMd" class="shot" v-html="mdToHtml(snapMd)"></div>
-          <div style="display:flex;gap:6px;margin-top:6px">
-            <button class="btn" @click="loadSnapshot" :disabled="snapLoading">🤖 生成盘中快照</button>
-            <button class="btn primary" @click="pushSnapshot" :disabled="snapPushing || !snapMd">推送到手机</button>
+        <div v-else class="empty">
+          <svg class="e-ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M3 17l6-6 4 4 8-8"/><path d="M21 7v4h-4"/></svg>
+          <div class="e-t">自选股池为空</div><div class="e-h">先在左侧「自选股」添加标的,再回来生成盘中快照。</div>
+        </div>
+        <div v-if="snapError" class="error">{{snapError}}</div>
+        <div class="btn-row">
+          <button class="btn" @click="loadTechSnapshot"
+                  :disabled="snapFactsLoading || snapAnalysisLoading || !techCode"><svg class="bi" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/></svg>生成盘中快照</button>
+          <button class="btn" @click="runCounterfactual"
+                  :disabled="cfLoading || !techCode" title="收盘后手动运行:若跌破/站上 迁移表推演(情境分支,非建议)"><svg class="bi" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><line x1="6" y1="3" x2="6" y2="15"/><circle cx="18" cy="6" r="3"/><circle cx="6" cy="18" r="3"/><path d="M18 9a9 9 0 0 1-9 9"/></svg>收盘反事实推演</button>
+          <!-- 推送到手机:入口已移除,功能延后到更高版本(app.js pushSnapshot / /api/snapshot/push 保留) -->
+        </div>
+
+        <!-- 卡1:数据快照(程序计算 · 可复核,与 LLM 完全独立) -->
+        <div class="sub-card tech-card" style="margin-top:10px">
+          <h3>数据快照 <span class="dim">程序计算 · 可复核</span></h3>
+          <div class="scrolly">
+            <div v-if="snapFactsError" class="error">{{snapFactsError}}</div>
+            <div v-if="snapFactsLoading && !snapFacts" class="skeleton"></div>
+            <div v-if="snapFacts" class="shot" v-html="mdToHtml(snapFacts)"></div>
+            <div v-if="!snapFactsLoading && !snapFacts && !snapFactsError" class="empty">
+              <svg class="e-ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="2"/><path d="M8 17v-4"/><path d="M12 17v-7"/><path d="M16 17v-2"/></svg>
+              <div class="e-t">还没有数据快照</div><div class="e-h">点击上方「生成盘中快照」获取实时数据。</div>
+            </div>
+          </div>
+        </div>
+
+        <!-- 卡2:深入分析(LLM 多周期矛盾推演,失败时降级确定性信号) -->
+        <div class="sub-card tech-card tech-card-analysis" style="margin-top:10px">
+          <h3>深入分析 <span class="dim">LLM 多周期矛盾推演</span></h3>
+          <div class="scrolly">
+            <div v-if="snapAnalysisError" class="error">{{snapAnalysisError}}</div>
+            <div v-if="snapAnalysisLoading && !snapAnalysis" class="skeleton"></div>
+            <div v-if="snapAnalysis" class="shot" v-html="mdToHtml(snapAnalysis)"></div>
+            <div v-if="!snapAnalysisLoading && !snapAnalysis && !snapAnalysisError" class="empty">
+              <svg class="e-ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><path d="M14 2v6h6"/><line x1="8" y1="13" x2="16" y2="13"/><line x1="8" y1="17" x2="16" y2="17"/></svg>
+              <div class="e-t">还没有深入分析</div><div class="e-h">点击上方「生成盘中快照」生成 LLM 多周期矛盾推演。</div>
+            </div>
+          </div>
+        </div>
+
+        <!-- 卡3:反事实推演(盘后·情景分支,手动触发;LLM 失败降级确定性迁移表) -->
+        <div class="sub-card tech-card tech-card-analysis" style="margin-top:10px">
+          <h3>反事实推演 <span class="dim">盘后情景分支 · 非建议</span></h3>
+          <div class="scrolly">
+            <div v-if="cfError" class="error">{{cfError}}</div>
+            <div v-if="cfLoading && !cfMarkdown" class="skeleton"></div>
+            <div v-if="cfMarkdown" class="shot" v-html="mdToHtml(cfMarkdown)"></div>
+            <div v-if="!cfLoading && !cfMarkdown && !cfError" class="empty">
+              <svg class="e-ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><circle cx="6" cy="5" r="2.5"/><circle cx="6" cy="19" r="2.5"/><circle cx="18" cy="12" r="2.5"/><path d="M6 7.5v9"/><path d="M18 9.9a10 10 0 0 0-9.5-1.6"/><path d="M18 14.1a10 10 0 0 1-9.5 1.6"/></svg>
+              <div class="e-t">还没有反事实推演</div><div class="e-h">收盘后点击上方「收盘反事实推演」:基于当天完整盘面,推演「若跌破 X / 若站上 Y」的支撑迁移。</div>
+            </div>
           </div>
         </div>
       </div>
@@ -200,13 +253,308 @@
         <div v-if="closeError" class="error">{{closeError}}</div>
         <div v-if="closeLoading" class="loading">生成中(拉取收盘数据 + LLM 复盘,约 10 秒)…</div>
         <div v-else-if="closeMd" class="shot" v-html="mdToHtml(closeMd)"></div>
-        <div v-else class="dim" style="font-size:12px;line-height:1.7">
-          点击下方按钮生成收盘对账:大盘关键位攻防 → 各标的"剧本 vs 实际"→ 复盘五问 + 纪律评分。
+        <div v-else class="empty">
+          <svg class="e-ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="3" width="16" height="18" rx="2"/><line x1="9" y1="8" x2="15" y2="8"/><line x1="9" y1="12" x2="15" y2="12"/><line x1="9" y1="16" x2="13" y2="16"/></svg>
+          <div class="e-t">还没有收盘对账</div><div class="e-h">点击下方「生成收盘对账」:大盘关键位攻防 → 各标的「剧本 vs 实际」→ 复盘五问 + 纪律评分。</div>
         </div>
-        <button class="btn" @click="loadClose" :disabled="closeLoading">📋 生成收盘对账</button>
+        <button class="btn" @click="loadClose" :disabled="closeLoading"><svg class="bi" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><polyline points="9 11 12 14 22 4"/><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"/></svg>生成收盘对账</button>
       </div>
+
+      <!-- 设置:已重构为居中弹窗(Modal),见下方 .set-modal(模型 / 持仓 / 通用) -->
     </div>
   </main>
+
+  <!-- ===== 设置弹窗(Modal)::居中 · 半透明遮罩 · 左侧垂直导航 + 右侧内容区 =====
+       三种关闭方式:X 按钮 / 点击遮罩 / 按 Esc。风格与全局暗色一致。 -->
+  <div class="set-modal" v-if="settingsOpen" @click.self="closeSettings">
+    <div class="set-box" role="dialog" aria-modal="true" aria-labelledby="setTitle">
+      <div class="set-head">
+        <div class="set-tt">
+          <h3 id="setTitle">设置</h3>
+          <span class="dim" style="font-size:11px;font-weight:400">模型 · 持仓 · 通用</span>
+        </div>
+        <button class="set-x" @click="closeSettings" title="关闭 (Esc)" aria-label="关闭设置">✕</button>
+      </div>
+      <div class="set-body">
+        <nav class="set-nav">
+          <button v-for="s in settingsNav" :key="s.key"
+                  :class="{on: settingsPane===s.key}"
+                  @click="settingsPane=s.key">{{s.label}}</button>
+        </nav>
+        <div class="set-pane">
+          <div v-if="settingsMsg" class="set-msg">
+            <span>{{settingsMsg}}</span>
+            <span class="set-msg-x" @click="settingsMsg=''" aria-label="关闭提示">✕</span>
+          </div>
+
+          <!-- ① 模型(LLM 配置 + API Key,Web 表单可编辑,保存即生效) -->
+          <div v-if="settingsPane==='model'" class="set-content">
+            <div class="set-intro">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><line x1="12" y1="16" x2="12" y2="12"/><line x1="12" y1="8" x2="12.01" y2="8"/></svg>
+              <span>列表内模型按<b>尝试顺序</b>自动切换——配额用尽/失败会自动试下一个,排在最前的优先级最高,可用拖拽手柄调整顺序。列表数量不设限,可随时添加/删除。</span>
+            </div>
+
+            <!-- ①-1 模型列表(卡片 + 拖拽排序 + 编辑/删除/测试连接) -->
+            <div class="set-sec">
+              <div class="set-card-head">
+                <h3>模型列表 <span class="dim">{{llmProfiles.length}} 条 · 按顺序尝试</span></h3>
+                <div class="set-card-ops">
+                  <button class="btn mini" @click="addModel" :disabled="llmSaving || !!editingUid">＋ 添加模型</button>
+                  <button class="btn primary" @click="saveLlmConfig" :disabled="llmSaving">{{llmSaving ? '保存中…' : '保存配置'}}</button>
+                </div>
+              </div>
+              <div v-if="llmError" class="error" style="padding:6px 0">{{llmError}}</div>
+              <div v-if="llmSavedAt" class="ok-line">✓ {{llmSavedAt}}</div>
+
+              <div v-if="llmProfiles.length" class="model-list">
+                <div v-for="p in llmProfiles" :key="p.uid"
+                     class="model-item"
+                     :class="{ 'row-editing': editingUid===p.uid, 'drag-over': dragOverUid===p.uid }"
+                     @dragover.prevent="dragOver(p)" @dragleave="dragLeave(p)" @drop.prevent="dropOn(p)">
+                  <div class="mi-head">
+                    <span class="drag-handle" draggable="true" title="拖拽调整顺序"
+                          @dragstart="dragStart(p, $event)" @dragend="dragEnd">⠿</span>
+                    <span class="mi-name">{{p.provider}}</span>
+                    <span class="mi-model">{{p.model || '新模型'}}</span>
+                    <span v-if="p.base_url" class="mi-url" :title="baseUrlTitle(p)">{{p.base_url}}</span>
+                    <span v-else class="mi-url def" :title="baseUrlTitle(p)">默认 · {{ defaultUrlOf(p.provider) || '内置地址' }}</span>
+                    <span class="mi-sp"></span>
+                    <span v-if="p.testState==='fail'" class="status st-hit" title="最近一次测试连接失败">已失效</span>
+                    <span v-else-if="p.has_key" class="status st-ok">已配置</span>
+                    <span v-else class="status st-no">未配置</span>
+                  </div>
+                  <div v-if="editingUid!==p.uid" class="mi-ops">
+                    <button class="btn mini" @click="testModel(p)" :disabled="llmTesting[p.uid]">{{llmTesting[p.uid] ? '测试中…' : '测试连接'}}</button>
+                    <button class="btn mini" @click="editModel(p)" :disabled="!!editingUid && editingUid!==p.uid">编辑</button>
+                    <button class="btn mini del" @click="delModel(p)">删除</button>
+                    <span v-if="llmTestMsg[p.uid] && !llmTesting[p.uid]" class="mi-msg"
+                          :class="llmTestMsg[p.uid].ok ? 't-ok-line' : 't-err-line'">{{llmTestMsg[p.uid].text}}</span>
+                  </div>
+
+                  <!-- 卡片内展开的编辑表单(新增/编辑共用) -->
+                  <div v-if="editingUid===p.uid" class="mi-edit">
+                    <div class="edit-grid">
+                      <label>服务商
+                        <select v-model="editingRow.provider">
+                          <option value="zhipu">zhipu(智谱)</option>
+                          <option value="siliconflow">siliconflow(硅基流动)</option>
+                          <option value="openrouter">openrouter</option>
+                          <option value="custom">自定义 custom</option>
+                        </select>
+                      </label>
+                      <label>模型名称
+                        <input ref="editModelInput" v-model="editingRow.model" placeholder="如 glm-4-flash-250414">
+                      </label>
+                      <label class="span2">Base URL
+                        <input v-model="editingRow.base_url" :placeholder="defaultUrlOf(editingRow.provider) || 'https://…/chat/completions'">
+                        <span class="sub-hint">留空 = 使用该服务商默认地址;自定义服务商(custom)必填</span>
+                      </label>
+                      <label>API Key
+                        <span class="pw-wrap">
+                          <input :type="editingRow.keyVisible ? 'text' : 'password'" v-model="editingRow.key"
+                                 autocomplete="new-password"
+                                 :placeholder="editingRow.hasKey ? '已配置(留空保持不变)' : '输入 API Key'">
+                          <button type="button" class="eye-btn" @click="editingRow.keyVisible=!editingRow.keyVisible"
+                                  :title="editingRow.keyVisible ? '隐藏' : '显示'">
+                            <svg v-if="!editingRow.keyVisible" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>
+                            <svg v-else viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19m-6.72-1.07a3 3 0 1 1-4.24-4.24"/><line x1="1" y1="1" x2="23" y2="23"/></svg>
+                          </button>
+                        </span>
+                      </label>
+                      <div class="edit-ops span2">
+                        <span v-if="testMsg" :class="testMsg.ok ? 't-ok-line' : 't-err-line'">{{testMsg.text}}</span>
+                        <button class="btn" @click="testRowForm" :disabled="testLoading">测试连接</button>
+                        <button class="btn primary" @click="saveRow">保存</button>
+                        <button class="btn" @click="cancelEdit">取消</button>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              </div>
+              <div v-else class="set-empty">暂无模型——点击上方「＋ 添加模型」开始配置</div>
+              <div class="set-footnote">
+                「测试连接」仅发送一个最小请求验证 Key 有效性,不保存任何内容;
+                修改后需点击「保存配置」才写入文件并立即生效。
+              </div>
+            </div>
+
+            <!-- ①-2 模型密钥(脱敏展示 + 密文输入覆盖,卡片式布局) -->
+            <div class="set-sec">
+              <div class="set-card-head">
+                <h3>模型密钥 <span class="dim">留空输入框不修改</span></h3>
+                <div class="set-card-ops">
+                  <button class="btn" @click="saveKeys" :disabled="llmSaving">{{llmSaving ? '保存中…' : '保存 Key'}}</button>
+                </div>
+              </div>
+              <div v-if="llmKeys.length" class="key-cards">
+                <div v-for="k in llmKeys" :key="k.provider" class="key-card">
+                  <div class="kc-left">
+                    <span class="kc-name">{{k.provider}}</span>
+                    <span v-if="k.set && k.plain" class="key-plain" :title="'点击眼睛可隐藏'">{{k.plain}}</span>
+                    <span v-else-if="k.set" class="key-mask">{{k.masked}}</span>
+                    <span v-else class="dim">未配置</span>
+                    <button v-if="k.set && !k.plain" type="button" class="eye-btn" title="查看完整 Key" @click="peekKey(k)">
+                      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>
+                    </button>
+                    <button v-else-if="k.set && k.plain" type="button" class="eye-btn" title="隐藏" @click="hideKey(k)">
+                      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19m-6.72-1.07a3 3 0 1 1-4.24-4.24"/><line x1="1" y1="1" x2="23" y2="23"/></svg>
+                    </button>
+                  </div>
+                  <div class="kc-right">
+                    <span class="pw-wrap">
+                      <input :type="k.visible ? 'text' : 'password'" v-model="k.input" autocomplete="new-password"
+                             :placeholder="k.set ? '留空则不修改' : '输入新 Key'">
+                      <button type="button" class="eye-btn" @click="k.visible=!k.visible" :title="k.visible ? '隐藏' : '显示'">
+                        <svg v-if="!k.visible" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>
+                        <svg v-else viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19m-6.72-1.07a3 3 0 1 1-4.24-4.24"/><line x1="1" y1="1" x2="23" y2="23"/></svg>
+                      </button>
+                    </span>
+                  </div>
+                </div>
+              </div>
+              <div v-else class="set-empty">模型列表为空——添加模型并「保存配置」后,其服务商的密钥会出现在这里。</div>
+              <div class="set-footnote">
+                已保存的 Key 以脱敏形式展示(仅首尾 4 位);Key 与模型配置保存在 settings.local.yaml(已 gitignore,不随代码提交)。
+              </div>
+            </div>
+
+            <!-- ①-3 高级配置(仅限开发者 · 安全提示) -->
+            <div class="set-sec">
+              <div class="set-card-head">
+                <h3>高级配置 <span class="dim">仅限开发者</span></h3>
+                <div class="set-card-ops">
+                  <button class="btn mini" @click="advOpen=!advOpen">{{advOpen ? '收起' : '展开'}}</button>
+                </div>
+              </div>
+              <div v-if="advOpen" class="adv-body">
+                <div class="adv-note">出于安全考虑,网页端不支持直接读取或修改本地配置文件。</div>
+                <div class="adv-path-row">
+                  <code class="adv-path">config/settings.local.yaml</code>
+                  <button class="btn mini" @click="copyPath('config/settings.local.yaml')">复制路径</button>
+                </div>
+                <div class="adv-path-row">
+                  <code class="adv-path">config/settings.yaml</code>
+                  <button class="btn mini" @click="copyPath('config/settings.yaml')">复制路径</button>
+                </div>
+                <div v-if="advMsg" class="adv-msg">{{advMsg}}</div>
+                <div class="adv-note">修改文件后,请刷新页面或重启应用以生效。</div>
+              </div>
+            </div>
+          </div>
+
+          <!-- ② 持仓(持仓卡管理 + 账户管理) -->
+          <div v-if="settingsPane==='holdings'" class="set-content">
+            <div class="set-sec">
+              <div class="set-card-head">
+                <h3>持仓卡 <span class="dim">{{holdings.length}} 只 · 联动自选股池</span></h3>
+              </div>
+              <table class="flat-tbl">
+                <thead><tr><th>代码</th><th>成本</th><th>数量(股)</th><th>状态</th><th style="width:36px"></th></tr></thead>
+                <tbody>
+                  <tr v-for="h in holdings" :key="h.symbol">
+                    <td class="nm">{{h.name}} {{h.symbol}}</td>
+                    <td>{{fmtPrice3(h.cost)}}</td>
+                    <td>{{h.quantity}}</td>
+                    <td>{{h.status}}</td>
+                    <td><button class="btn mini del" @click="delHolding(h.symbol)">✕</button></td>
+                  </tr>
+                  <tr v-if="!holdings.length"><td colspan="5" class="dim">暂无持仓,下方添加</td></tr>
+                </tbody>
+              </table>
+              <div class="form-grid" style="margin-top:12px">
+                <div class="fld"><label>代码</label><input class="ctl" v-model="holdForm.symbol" placeholder="如 512480"></div>
+                <div class="fld"><label>成本</label><input class="ctl" type="number" step="0.001" v-model="holdForm.cost" placeholder="0.000"></div>
+                <div class="fld"><label>数量(股)</label><input class="ctl" type="number" v-model="holdForm.quantity" placeholder="0"></div>
+                <div class="fld"><label>状态</label><select class="ctl" v-model="holdForm.status"><option>持仓</option><option>锚点</option><option>观察</option></select></div>
+              </div>
+              <div style="margin-top:12px"><button class="btn primary" @click="addHolding">＋ 添加持仓</button></div>
+              <div class="set-footnote">新增持仓自动加入自选股池;自选池中的持仓标的不允许删除。</div>
+            </div>
+
+            <div class="set-sec">
+              <div class="set-card-head">
+                <h3>账户 <span class="dim">现金底线 ≥ 20%</span></h3>
+              </div>
+              <div class="form-grid">
+                <div class="fld"><label>总资金</label><input class="ctl" type="number" v-model="account.total_capital" placeholder="如 25000" @input="acctSaved=''"></div>
+                <div class="fld"><label>现金余额</label><input class="ctl" type="number" v-model="account.cash" placeholder="如 15000" @input="acctSaved=''"></div>
+              </div>
+              <div style="display:flex;align-items:center;gap:8px;margin-top:12px">
+                <button class="btn" @click="saveAccount" :disabled="acctSaving">{{acctSaving ? '保存中…' : '保存'}}</button>
+                <span v-if="acctSaved" class="status st-ok">{{acctSaved}}</span>
+              </div>
+              <div class="set-footnote">总资金 / 现金余额用于剩余可用额度与现金底线检查(交易系统设计 §7)。</div>
+            </div>
+          </div>
+
+          <!-- ③ 通用(刷新间隔等) -->
+          <div v-if="settingsPane==='general'" class="set-content">
+            <div class="set-sec">
+              <div class="set-card-head">
+                <h3>刷新间隔 <span class="dim">行情页轮询</span></h3>
+              </div>
+              <div class="fld" style="max-width:220px">
+                <label>间隔秒数</label>
+                <input class="ctl" type="number" min="1" max="3600" step="1" v-model.number="refreshSec" @input="refreshSaved=''">
+                <span class="hint">行情页每 N 秒自动刷新一次</span>
+              </div>
+              <div style="display:flex;align-items:center;gap:8px;margin-top:12px">
+                <button class="btn" @click="saveRefreshConfig" :disabled="refreshSaving">{{refreshSaving ? '保存中…' : '保存'}}</button>
+                <span v-if="refreshSaved" class="status st-ok">{{refreshSaved}}</span>
+              </div>
+              <div class="set-footnote">
+                顶部指数与候选股池每 N 秒自动刷新。候选池每次会对每只标的请求一次实时行情
+                (池内 6 只),同花顺 fuyao 有限频(4001),失败自动降级腾讯免费接口;
+                1-3 秒仅适合单只盯盘,多标的建议 5 秒以上。
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ===== 悬浮面板(里程碑7)::自选股池唯一真源 · 持仓高亮 · 标记/涨跌/换手/量/额可选 · 宽度自适应 ===== -->
+  <div class="float" id="floatPanel" :style="{width: floatWidth + 'px'}">
+    <div class="f-head">
+      <span class="f-t">AlphaPrism</span>
+      <span class="dim f-sub">自选股 · {{floatShown}}/{{watchlist.length}}</span>
+      <span class="dim f-time" v-if="floatUpdated">{{floatUpdated}}</span>
+    </div>
+    <div class="f-body">
+      <div v-if="!watchlist.length" class="f-empty">
+        自选股池为空——先在左侧「自选股」添加标的。
+      </div>
+      <div v-for="w in floatRows" :key="w.symbol" class="frow"
+           :class="{sel: w.symbol===current, held: !!holdingOf(w.symbol), 'dim-row': !markerOf(w.symbol)}"
+           @click="select(w.symbol)">
+        <span class="f-hold"><span v-if="holdingOf(w.symbol)" class="tag t-hold" title="持仓">持</span></span>
+        <span class="nm" :title="w.name">{{shortName(w.name)}}</span>
+        <span class="px" :class="pxCls(snapChg(w.snapshot))">{{fmtQuote(w.snapshot)}}</span>
+        <span v-if="floatCols.chg" class="chg" :class="pxCls(snapChg(w.snapshot))">{{pct(snapChg(w.snapshot))}}</span>
+        <span v-if="floatCols.turn" class="turn">{{volRatio(w.snapshot)}}</span>
+        <span v-if="floatCols.vol" class="vol">{{fmtSnapVol(w.snapshot)}}</span>
+        <span v-if="floatCols.amt" class="amt">{{fmtSnapAmt(w.snapshot)}}</span>
+        <span v-if="floatCols.marker" class="mkcell">
+          <span v-if="markerOf(w.symbol)" class="concl"
+                :class="markerCls(w.symbol)" :title="markerTitle(w.symbol)">{{markerWord(w.symbol)}}</span>
+          <span v-else class="mk-none" title="未生成盘中快照">—</span>
+        </span>
+        <span v-if="refreshCode===w.symbol" class="spinner" title="生成中">⋯</span>
+        <button v-if="floatCols.marker" class="icon-btn f-ref" title="单只生成盘中快照"
+                @click.stop="genFloatSnapshot(w.symbol)">⟳</button>
+      </div>
+    </div>
+    <div class="f-foot foot-scroll">
+      <label class="f-toggle">
+        <input type="checkbox" v-model="floatOnlyHeld"> 仅持仓
+      </label>
+      <span class="f-flex"></span>
+      <button v-for="c in floatColDefs" :key="c.key"
+              class="f-col" :class="{on: floatCols[c.key]}"
+              @click="toggleFloatCol(c.key)">{{c.label}}</button>
+    </div>
+  </div>
 
   <!-- ===== 作战地图全宽视图 ===== -->
   <div class="fullview" :class="{on: view==='map'}">
@@ -272,7 +620,7 @@
       </details>
 
       <details v-if="(bm.unresolved||[]).length" style="border-color:#5c1a22">
-        <summary>⚠️ 待人工确认({{bm.unresolved.length}})</summary>
+        <summary><svg class="bi" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" style="width:14px;height:14px;vertical-align:-2px;color:var(--yellow)"><path d="M10.29 3.86 1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg> 待人工确认({{bm.unresolved.length}})</summary>
         <div class="body"><div v-for="(u,i) in bm.unresolved" :key="i">{{u}}</div></div>
       </details>
     </div>
@@ -312,6 +660,49 @@
           <tr v-if="!bt.trades.length"><td colspan="5" class="dim">区间内无交易(静态关键位不匹配历史价格属预期)</td></tr>
         </tbody>
       </table>
+    </template>
+  </div>
+
+  <!-- ===== 信息层评估全宽视图(M6) ===== -->
+  <div class="fullview" :class="{on: view==='info'}">
+    <div class="mv-head">
+      <h3>信息层评估 <span class="dim">催化判定 → N日验证 → 准确率 / alpha</span></h3>
+      <div class="mv-sub">每个催化判定(利好/利空 + 置信度)记录 → 3/20 个交易日后用板块日线 + 上证基准 + 关键位验证 → 统计信息层是否带来 alpha。纯确定性规则,不靠 LLM 复评;数据源 = important_news × catalyst_verification。</div>
+    </div>
+    <div v-if="!infoStats" class="loading">加载中…</div>
+    <template v-else>
+      <div class="metrics">
+        <div class="metric"><div class="k">催化判定数(20日)</div><div class="v">{{infoStats.stats20.total.n}}</div><div class="s">样本累计</div></div>
+        <div class="metric"><div class="k">20日应验率</div><div class="v" :class="pxCls((infoStats.stats20.total.hit_rate-0.5)*100)">{{Math.round(infoStats.stats20.total.hit_rate*100)}}%</div><div class="s">应验/样本</div></div>
+        <div class="metric"><div class="k">3日应验率</div><div class="v" :class="pxCls((infoStats.stats3.total.hit_rate-0.5)*100)">{{Math.round(infoStats.stats3.total.hit_rate*100)}}%</div><div class="s">短期脉冲</div></div>
+      </div>
+      <div class="chart-canvas" ref="infoChartEl" style="height:220px"></div>
+      <h3 style="margin-top:12px;color:#fff">按消息类型 <span class="dim">20日验证</span></h3>
+      <table class="mk" style="margin-top:6px">
+        <thead><tr><th>类型</th><th>样本</th><th>应验</th><th>部分</th><th>未应验</th><th>应验率</th></tr></thead>
+        <tbody>
+          <tr v-for="t in infoStats.stats20.by_type" :key="t.key">
+            <td>{{t.key}}</td><td>{{t.n}}</td><td>{{t.hit}}</td><td>{{t.partial}}</td><td>{{t.miss}}</td>
+            <td :class="pxCls((t.hit_rate-0.5)*100)">{{Math.round(t.hit_rate*100)}}%</td>
+          </tr>
+          <tr v-if="!infoStats.stats20.by_type.length"><td colspan="6" class="dim">暂无验证数据(判定满 20 个交易日后才会出现)</td></tr>
+        </tbody>
+      </table>
+      <h3 style="margin-top:12px;color:#fff">按置信度 <span class="dim">校准置信度标定</span></h3>
+      <table class="mk" style="margin-top:6px">
+        <thead><tr><th>置信度</th><th>样本</th><th>应验</th><th>部分</th><th>未应验</th><th>应验率</th></tr></thead>
+        <tbody>
+          <tr v-for="t in infoStats.stats20.by_confidence" :key="t.key">
+            <td>{{t.key}}</td><td>{{t.n}}</td><td>{{t.hit}}</td><td>{{t.partial}}</td><td>{{t.miss}}</td>
+            <td :class="pxCls((t.hit_rate-0.5)*100)">{{Math.round(t.hit_rate*100)}}%</td>
+          </tr>
+          <tr v-if="!infoStats.stats20.by_confidence.length"><td colspan="6" class="dim">暂无验证数据</td></tr>
+        </tbody>
+      </table>
+      <div class="shot" style="margin-top:12px">
+        <b>关键词调优建议</b> <span class="dim">每 2 周 · 人工闸门(机器建议,确认后改配置)</span>
+        <div style="margin-top:6px" v-html="mdToHtml(infoStats.report)"></div>
+      </div>
     </template>
   </div>
 </div>
