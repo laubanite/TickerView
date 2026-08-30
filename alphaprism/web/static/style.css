@@ -457,3 +457,39 @@ select.ctl{cursor:pointer}
   .conc-hit,.conc-near{animation:none!important}
   .frow .spinner{animation:none!important}
 }
+
+/* ===== 盘后建议验证日历(增量4 MVP:绿=应验 红=未应验 灰=待定)===== */
+.vc-grid{display:flex;flex-direction:column;gap:6px}
+.vc-day{border:1px solid var(--line);border-radius:10px;padding:7px 10px;display:flex;align-items:center;
+  gap:10px;cursor:pointer;transition:border-color .15s,background .15s;background:var(--panel2)}
+.vc-day:hover{border-color:#39424a}
+.vc-day.open{border-color:#4c8dff42;background:var(--panel)}
+.vc-date{flex:none;font-size:12px;color:var(--text);width:76px;line-height:1.3}
+.vc-date .dim{display:block;font-size:10px}
+.vc-cols{display:flex;gap:6px;flex-wrap:wrap}
+.vc-cell{flex:none;width:76px;border-radius:8px;padding:4px 6px;text-align:center;font-size:11px;
+  line-height:1.4;color:#06251f}
+.vc-cell .vc-sym{display:block;font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.vc-cell .vc-out{display:block;font-size:10px;opacity:.9}
+.vc-ok{background:var(--green);color:#06251f}
+.vc-bad{background:var(--red);color:#2a0508}
+.vc-pend{background:rgba(76,141,255,.10);border:1px solid #4c8dff;color:#c9d6ea}
+.vc-watch{background:var(--panel2);border:1px dashed rgba(255,255,255,.18);color:var(--dim)}
+.vc-detail{border:1px solid var(--line);border-radius:10px;margin-top:8px;padding:10px 12px;background:var(--panel2)}
+.vc-dhead{font-size:12px;color:var(--text);margin-bottom:6px}
+.vc-item{border-top:1px solid var(--line);padding:8px 2px}
+.vc-item:first-of-type{border-top:none}
+.vc-item-head{font-size:12px}
+.vc-item-head b{margin:0 6px;color:var(--text)}
+.vc-item-rs{display:flex;gap:10px;font-size:12px;margin:5px 0}
+.vc-r{padding:2px 8px;border-radius:6px;color:#e8eaec}
+.vc-r.vc-ok{background:#0f2e26;color:var(--green)}
+.vc-r.vc-bad{background:#3a1520;color:var(--red)}
+.vc-r.vc-pend{background:rgba(76,141,255,.10);color:#8fb3e8}
+.vc-item-md{font-size:11px;margin-top:4px;white-space:pre-wrap}
+
+/* ===== 盘中一句话信号(L1,2026-09:规则引擎确定性,零 LLM,两行展示)===== */
+.l1-card{border-top:2px solid #4c8dff}
+.l1-main{font-size:13px;line-height:1.65;color:var(--text);margin-top:4px}
+.l1-line{color:var(--text)}
+.l1-acts{color:#b9c2c9;font-size:12.5px}

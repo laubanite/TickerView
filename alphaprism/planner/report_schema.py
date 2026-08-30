@@ -220,13 +220,27 @@ def fallback_conclusion(state: dict, anchors: dict) -> dict:
         trigger = {}
     invalidation = {"verb": "跌破", "price_level": f"{float(cut):.3f}", "source": cut_src,
                     "action": "减仓"} if cut else {}
-    one_sentence = (f"现价 {float(anchor):.3f} 处于 {state_word} 状态"
-                    + (f",回踩带 {float(zone.get('lower')):.3f}-{float(zone.get('upper')):.3f}"
-                       + (" 内,企稳观察" if zone.get("in_zone")
-                          else " 上方附近,尚未跌破,回踩带观察中" if zone.get("tight")
-                          else " 下方未到,等待回踩")
-                       if zone else ",等待企稳/恐慌证据")
-                    + (f";跌破 {float(stop):.3f} 清仓止损" if stop else ""))
+    # 一句话(2026-09 两行结构):第一句=现价·状态;第二句=动作链(承接带/突破/减仓/止损),
+    # 全部来自参数档位白名单,零 LLM。前端按首个"。"拆两行展示。
+    head = (f"现价 {float(anchor):.3f} · {state_word}" if anchor else state_word)
+    acts = []
+    if zone:
+        lo, up = float(zone.get("lower")), float(zone.get("upper"))
+        if zone.get("in_zone"):
+            acts.append(f"带内({lo:.3f}-{up:.3f})企稳即加仓候选")
+        elif zone.get("tight"):
+            acts.append(f"回踩 {lo:.3f}-{up:.3f} 观察企稳")
+        else:
+            acts.append(f"回踩 {lo:.3f}-{up:.3f} 待企稳")
+    else:
+        acts.append("无有效回踩结构")
+    if breakout:
+        acts.append(f"突破 {float(breakout):.3f} 需放量+日线收盘")
+    if cut:
+        acts.append(f"跌破 {float(cut):.3f} 减仓")
+    if stop:
+        acts.append(f"破 {float(stop):.3f} 止损")
+    one_sentence = head + "。" + "；".join(acts) + "。"
     return {
         "one_sentence": one_sentence,
         "signal_type": signal,

@@ -91,10 +91,83 @@ def etf_thscode(symbol: str) -> str:
 
 
 def fetch_fund_snapshot(symbol: str) -> dict | None:
-    """场内 ETF 实时快照(同花顺):{last_price, volume, turnover, turnover_ratio_pct, ...}。"""
-    js = _get(f"{BASE}/api/fund/market/snapshot", {"thscode": etf_thscode(symbol)})
-    items = (js.get("data") or {}).get("item", [])
-    return items[0] if items else None
+    """场内 ETF 实时快照:优先同花顺,失败自动降级腾讯 qt(字段形状保持一致)。
+
+    同花顺 /api/fund/market/snapshot 对部分 ETF 返回 "3004: This fund does not
+    support market data"(2026-08-25 实测池内多只均如此);腾讯 qt.gtimg.cn 实测
+    ETF 全字段可用(价格/量/额/换手/量比)。统一输出前端消费的字段形状:
+    {last_price, price_change_ratio_pct, volume(股), turnover(元), turnover_ratio_pct, ...}。
+    """
+    try:
+        js = _get(f"{BASE}/api/fund/market/snapshot", {"thscode": etf_thscode(symbol)})
+        items = (js.get("data") or {}).get("item", [])
+        snap = items[0] if items else None
+        if snap:
+            return snap
+        logger.warning("[%s] 同花顺快照无数据,降级腾讯", symbol)
+    except FuyaoError as exc:
+        # 3004/2003/4001 等一律降级,不让单只失败拖垮整个自选池
+        if "3004" in str(exc) or "2003" in str(exc) or "4001" in str(exc):
+            logger.warning("[%s] 同花顺快照失败(%s),降级腾讯", symbol, exc)
+        else:
+            raise
+    except requests.RequestException as exc:
+        logger.warning("[%s] 同花顺快照网络错误(%s),降级腾讯", symbol, exc)
+    return _tencent_fund_snapshot(symbol)
+
+
+def _tencent_fund_snapshot(symbol: str) -> dict | None:
+    """腾讯 qt.gtimg.cn 场内 ETF 快照 → 统一字段形状(字段布局 2026-08-25 实测)。
+
+    88 字段关键位:3 现价 / 4 昨收 / 6 总量(手) / 31 涨跌幅% / 32 涨跌额 /
+    33 最高 / 34 最低 / 36 成交量(手) / 37 成交额(万元) / 38 换手率% / 49 量比。
+    返回 None 表示腾讯侧也拿不到(彻底失败,上层按无数据处理)。
+    """
+    from .etf_kline import _tx_symbol, HEADERS
+
+    tsym = _tx_symbol(symbol)
+    try:
+        resp = requests.get(f"https://qt.gtimg.cn/q={tsym}", headers=HEADERS, timeout=10)
+        resp.encoding = "gbk"
+        line = resp.text.strip().split(";")[0]
+        if "=" not in line:
+            return None
+        f = line.split("=")[1].strip('"').split("~")
+        if len(f) < 50:
+            return None
+
+        def _fl(i):
+            try:
+                return float(f[i]) if f[i] not in ("", "-") else None
+            except (ValueError, TypeError):
+                return None
+
+        price = _fl(3)
+        prev = _fl(4)
+        vol_hands = _fl(36)
+        amount_wan = _fl(37)
+        chg = _fl(31)
+        if price is None or prev is None or prev <= 0:
+            return None
+        chg = chg if chg is not None else round((price / prev - 1) * 100, 3)
+        return {
+            "thscode": etf_thscode(symbol),
+            "symbol": symbol,
+            "last_price": price,
+            "price_change_ratio_pct": round(chg, 3),
+            "open_price": _fl(5),
+            "high_price": _fl(33),
+            "low_price": _fl(34),
+            "pre_close": prev,
+            "volume": round(vol_hands * 100, 0) if vol_hands is not None else None,  # 手→股(与 fuyao 一致)
+            "turnover": round(amount_wan * 10000, 0) if amount_wan is not None else None,  # 万元→元
+            "turnover_ratio_pct": _fl(38),   # 换手率%
+            "vol_ratio": _fl(49),            # 量比(腾讯直接给,优于换手近似)
+            "source": "tencent",
+        }
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("[%s] 腾讯 ETF 快照失败: %s", symbol, exc)
+        return None
 
 
 def sector_crowding(cfg) -> list[dict]:

@@ -85,8 +85,8 @@ def _get_json(url: str, params: dict | None = None) -> dict:
 
 # --------------------------------------------------------------------------- 日线(腾讯前复权)
 
-def _fetch_tencent_daily_bars(symbol: str, start_date: str, end_date: str) -> list[list]:
-    tsym = _tx_symbol(symbol)
+def _fetch_tsym_daily_bars(tsym: str, start_date: str, end_date: str) -> list[list]:
+    """按腾讯符号拉日线(指数/ETF 通用;指数无前复权,取 day 原始序列)。"""
     bars: list[list] = []
     url = "https://web.ifzq.gtimg.cn/appstock/app/fqkline/get"
     for beg, end in _date_chunks(start_date, end_date):
@@ -103,6 +103,21 @@ def _fetch_tencent_daily_bars(symbol: str, start_date: str, end_date: str) -> li
             seen.add(bar[0])
             dedup.append(bar)
     return dedup
+
+
+def _fetch_tencent_daily_bars(symbol: str, start_date: str, end_date: str) -> list[list]:
+    return _fetch_tsym_daily_bars(_tx_symbol(symbol), start_date, end_date)
+
+
+def fetch_index_daily(ths_code: str, start_date: str, end_date: str) -> pd.DataFrame:
+    """指数日线(腾讯)。ths_code 形如 000001.SH → 腾讯 sh000001。
+
+    用于催化验证的超额基准(方案 M4)。指数无前复权,取 day 原始序列。
+    """
+    code, mkt = ths_code.split(".")
+    tsym = ("sh" if mkt.upper() == "SH" else "sz") + code
+    bars = _fetch_tsym_daily_bars(tsym, start_date, end_date)
+    return _tencent_bars_to_df(bars, tsym)
 
 
 def _tencent_bars_to_df(bars: list[list], symbol: str) -> pd.DataFrame:
@@ -182,9 +197,13 @@ def _append_today_if_needed(df: pd.DataFrame, symbol: str) -> pd.DataFrame:
 
 # --------------------------------------------------------------------------- 30分钟(腾讯)
 
-def fetch_30m(symbol: str, count: int = 320) -> pd.DataFrame:
-    """腾讯 30 分钟线(ifzq.gtimg.cn 直连,避开 web3 重定向)。"""
-    tsym = _tx_symbol(symbol)
+def fetch_30m(symbol: str, count: int = 320, tsym: str | None = None) -> pd.DataFrame:
+    """腾讯 30 分钟线(ifzq.gtimg.cn 直连,避开 web3 重定向)。
+
+    tsym 覆盖:指数等非 ETF 标的直接传腾讯符号(如 sh000001),不走 _tx_symbol(会把
+    000001 误判成 sz000001=平安银行)。
+    """
+    tsym = tsym or _tx_symbol(symbol)
     url = "https://ifzq.gtimg.cn/appstock/app/kline/mkline"
     params = {"param": f"{tsym},m30,,{count}"}
     js = _get_json(url, params)
@@ -208,15 +227,16 @@ def fetch_30m(symbol: str, count: int = 320) -> pd.DataFrame:
 
 # --------------------------------------------------------------------------- 分时(腾讯,1分钟)
 
-def fetch_minute(symbol: str) -> pd.DataFrame:
+def fetch_minute(symbol: str, tsym: str | None = None) -> pd.DataFrame:
     """腾讯当日分时(web.ifzq.gtimg.cn /appstock/app/minute/query)。
 
     每点格式:"0930 0.869 979 85075.00" = 时间 价格 累计量(手) 累计额(元)。
     均价 = 累计额 / 累计量(产品方案 §六,2026-08-19 实测 ETF+指数均可用)。
     返回字段:ts(09:30:00) price vol(单分钟量=累计量差分) amount(累计额)
              avg_price(均价) prev_close(昨收,来自 qt[4])。
+    tsym 覆盖:指数等非 ETF 标的直接传腾讯符号(如 sh000001)。
     """
-    tsym = _tx_symbol(symbol)
+    tsym = tsym or _tx_symbol(symbol)
     url = "https://web.ifzq.gtimg.cn/appstock/app/minute/query"
     js = _get_json(url, {"code": tsym})
     data = (js.get("data") or {}).get(tsym) or {}
@@ -264,6 +284,97 @@ def fetch_minute(symbol: str) -> pd.DataFrame:
     df["prev_close"] = prev_close
     df["symbol"] = symbol
     return df[["symbol", "ts", "price", "vol", "amount", "avg_price", "prev_close"]]
+
+
+# --------------------------------------------------------------------------- ETF 规模/份额(天天基金)
+
+def fetch_etf_fund_flow(symbol: str, nav: float | None = None) -> dict:
+    """ETF 份额(天天基金 gmbd 接口):期末总份额(亿份) + 份额变化 + 估算规模。
+
+    东财 push2* 行情接口被 WAF 拦,但 fundf10.eastmoney.com 基金数据接口可用
+    (2026-08-23 实测,需带 Referer)。份额为基金公司披露(季报 + 份额变动公告,
+    如 2026-07-09 期末 517.70亿份),比等季报规模更及时。
+    估算规模 = 最新份额 × 最新净值(nav 传入,默认用盘口 IOPV)。
+    ETF 资金信号以份额变化 + 折溢价为主,内外盘/大单净流入参考性弱(套利机制)。
+    失败返回 {}。
+    """
+    try:
+        url = ("https://fundf10.eastmoney.com/FundArchivesDatas.aspx"
+               f"?type=gmbd&mode=0&code={symbol}&rt=0.123")
+        headers = {**HEADERS, "Referer": f"http://fundf10.eastmoney.com/gmbd_{symbol}.html"}
+        resp = requests.get(url, headers=headers, timeout=10)
+        resp.encoding = "utf-8"
+        # 响应为 JSONP:content:"<table>...</table>",直接抽 td 单元格(每行 6 格:
+        # 日期/期间申购/期间赎回/期末总份额/期末净资产/净资产变动率)
+        tds = re.findall(r"<td[^>]*>([^<]*)</td>", resp.text)
+        rows = [tds[i:i + 6] for i in range(0, len(tds), 6)]
+        data = []
+        for r in rows:
+            if len(r) >= 4 and re.match(r"^\d{4}-\d{2}-\d{2}$", r[0].strip()):
+                share = r[3].strip()
+                if share and share != "---":
+                    data.append({"date": r[0].strip(), "share": float(share)})
+        if not data:
+            return {}
+        latest, prev = data[0], (data[1] if len(data) > 1 else None)
+        out = {"share": latest["share"], "date": latest["date"]}
+        if prev and prev["share"]:
+            chg = latest["share"] - prev["share"]
+            out["share_chg"] = round(chg, 2)
+            out["share_chg_pct"] = round(chg / prev["share"] * 100, 2)
+        if nav:
+            out["scale_est"] = round(latest["share"] * nav, 2)
+        return out
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("[%s] ETF 份额获取失败: %s", symbol, exc)
+        return {}
+
+
+# --------------------------------------------------------------------------- 实时盘口(腾讯 qt)
+
+def fetch_orderbook(symbol: str, tsym: str | None = None) -> dict:
+    """腾讯实时盘口(场内基金):五档买卖 / IOPV / 溢价率 / 量比 / 换手 / 外内盘。
+
+    qt.gtimg.cn 88 字段布局(2026-08-22 实测 sz159516):
+      9-18 买1-5(价,量)  19-28 卖1-5(价,量)  7/8 外盘/内盘(手)
+      33/34 交易所日内最高/最低  38 换手率%  49 量比  50 委差
+      77 溢价率%  78 IOPV
+    指数(sh000001)无五档字段 → 返回空 buy/sell,量比/换手仍可用。失败返回 {}。
+    """
+    tsym = tsym or _tx_symbol(symbol)
+    try:
+        resp = requests.get(f"https://qt.gtimg.cn/q={tsym}", headers=HEADERS, timeout=10)
+        resp.encoding = "gbk"
+        line = resp.text.strip().split(";")[0]
+        if "=" not in line:
+            return {}
+        f = line.split("=")[1].strip('"').split("~")
+        if len(f) < 30:
+            return {}
+
+        def _f(i):
+            try:
+                return float(f[i]) if f[i] else None
+            except (ValueError, TypeError):
+                return None
+
+        def _level(price_i, vol_i):
+            p = _f(price_i)
+            # 指数无五档:字段为 0 → 视为空,避免渲染 0.000/0手 伪档位
+            return {"price": p if p else None, "vol": _f(vol_i)}
+
+        buy = [_level(9 + i * 2, 10 + i * 2) for i in range(5)]
+        sell = [_level(19 + i * 2, 20 + i * 2) for i in range(5)]
+        return {
+            "buy": buy, "sell": sell,
+            "high": _f(33), "low": _f(34),   # 交易所日内最高/最低(分时采样会漏极值点)
+            "iopv": _f(78), "premium_pct": _f(77),
+            "vol_ratio": _f(49), "turnover_pct": _f(38),
+            "weicha": _f(50), "waipan": _f(7), "neipan": _f(8),
+        }
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("[%s] 盘口获取失败: %s", symbol, exc)
+        return {}
 
 
 # --------------------------------------------------------------------------- 对外接口

@@ -1249,14 +1249,16 @@ def _ensure_fund_section(md: str, snapshot_md: str) -> tuple[str, list[str]]:
 def _archive_advice(code: str, facts: dict, snapshot_md: str, analysis_md: str,
                     state: dict, anchors: dict, catalyst: dict | None,
                     category: str, degraded: bool) -> None:
-    """当日建议存档(M1' 归档,MVP 幂等:同交易日期只留最新一份)。"""
+    """当日建议存档(2026-09 数据流重构):每天每标的只留最终一份,后写覆盖先写
+    (以最终方向为准);消息源 = 确定性建议(build_deterministic_advice),
+    LLM 深入分析不再写归档。"""
     try:
         from ..db import connect, init_db
         conn = connect()
         init_db(conn)
         conn.execute(
-            "DELETE FROM advice_archive WHERE trade_date=? AND symbol=? AND created_at=?",
-            (str(facts.get("date", "")), code, str(facts.get("now", ""))))
+            "DELETE FROM advice_archive WHERE trade_date=? AND symbol=?",
+            (str(facts.get("date", "")), code))
         conn.execute(
             "INSERT INTO advice_archive (trade_date, symbol, created_at, anchor_price,"
             " scenario, state_word, risk_level, category, advice_md, snapshot_md, degraded)"
@@ -1349,6 +1351,41 @@ def build_tech_panel(code: str, cfg: Config | None = None,
     anchors = param_anchors(facts, holding)
     catalyst = catalyst_context(facts, state, cfg)
     return _panel_payload(code, facts, state, anchors, catalyst)
+
+
+def build_deterministic_advice(code: str, cfg: Config | None = None,
+                               now: datetime | None = None) -> dict:
+    """确定性建议(零 LLM,2026-09 数据流重构):信号骨架 + 参数档位 +
+    建议类别 + 程序兜底结论卡。
+
+    架构(用户拍板):L1 刷新 → 后台自动判断 → 结构化建议入库(盘后验证的
+    唯一数据源);LLM 深入分析是只读展示层,不再产生/覆盖归档建议。
+    """
+    from .intraday_engine import (catalyst_context, holding_context, param_anchors,
+                                  signal_state, suggest_category)
+    from .report_schema import fallback_conclusion, render_conclusion_card
+
+    cfg = cfg or Config()
+    now = now or datetime.now()
+    facts = _load_facts(code, cfg, now)
+    state = signal_state(facts)
+    holding = holding_context(cfg)
+    anchors = param_anchors(facts, holding)
+    catalyst = catalyst_context(facts, state, cfg)
+    category = suggest_category("## 建议类别: 观望", state)
+    card = fallback_conclusion(state, anchors)
+    advice_md = (f"## 建议类别: {category}\n\n"
+                 f"- 状态词: {state.get('state_word') or '-'}"
+                 f" · 场景: {state.get('scenario') or '-'}"
+                 f" · 风险: {(catalyst or {}).get('risk_level', '正常')}\n\n"
+                 + render_conclusion_card(card))
+    return {"facts": facts, "state": state, "anchors": anchors,
+            "catalyst": catalyst, "category": category,
+            "advice_md": advice_md, "degraded": False,
+            "card": card, "one_sentence": card.get("one_sentence", ""),
+            "trigger": card.get("trigger", {}),
+            "invalidation": card.get("invalidation", {}),
+            "signal_type": card.get("signal_type", category)}
 
 
 _CANDIDATE_TEMPS = (0.25, 0.55, 0.85)
@@ -1531,7 +1568,8 @@ def _state_meaning(state: dict) -> str:
 
 
 def build_tech_analysis(code: str, cfg: Config | None = None,
-                        now: datetime | None = None) -> tuple[str, bool]:
+                        now: datetime | None = None,
+                        facts: dict | None = None) -> tuple[str, bool]:
     """深入分析卡(v3.0,2026-08-29 架构转向):骨架底线句 + LLM 逐段填充。
 
     与 v2 的区别:不再是"LLM 一次生成 2000+ token 长文",而是——
@@ -1540,6 +1578,9 @@ def build_tech_analysis(code: str, cfg: Config | None = None,
     3. 每段独立 sanitize,违规/失败段回退底线句 → 输出永远完整可读;
     4. 六/七/建议类别/结论卡 = 纯程序输出,零 LLM;
     5. 内外盘/资金·信号行从 LLM 输入剔除(程序自标参考性弱,不制造矛盾)。
+    6. (2026-09)数据流重构:`facts` 可传入最新快照缓存(否则自动拉取);
+       本函数为只读展示层,**不再调用 _archive_advice**——归档只由
+       build_deterministic_advice(刷新时)写入。
     返回 (markdown, degraded)。数据快照由 build_tech_facts 单独生成。
     """
     from .intraday_engine import (catalyst_context, holding_context, param_anchors,
@@ -1552,7 +1593,8 @@ def build_tech_analysis(code: str, cfg: Config | None = None,
 
     cfg = cfg or Config()
     now = now or datetime.now()
-    facts = _load_facts(code, cfg, now)
+    if facts is None:
+        facts = _load_facts(code, cfg, now)
     state = signal_state(facts)
     holding = holding_context(cfg)
     anchors = param_anchors(facts, holding)
@@ -1641,6 +1683,5 @@ def build_tech_analysis(code: str, cfg: Config | None = None,
         md = md.rstrip() + "\n\n" + card_md
     # 内部标识后处理(2026-08-29 系统修复#⑦:任何内部编号/黑话不得泄漏给用户)
     md = _sanitize_internal_labels(md)
-    _archive_advice(code, facts, snapshot_md, md, state, anchors, catalyst,
-                    category, False)
+    # 2026-09 数据流重构:归档改由 build_deterministic_advice 负责,本函数只读展示
     return md, False

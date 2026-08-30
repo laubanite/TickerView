@@ -169,6 +169,77 @@ CREATE TABLE IF NOT EXISTS fetch_log (
     status TEXT NOT NULL,
     error  TEXT
 );
+
+CREATE TABLE IF NOT EXISTS important_news (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    trade_date  TEXT NOT NULL,
+    sector      TEXT NOT NULL,
+    symbol      TEXT,
+    text        TEXT NOT NULL,
+    impact      TEXT NOT NULL,
+    confidence  TEXT,
+    type        TEXT,
+    source_grade TEXT,
+    cross       INTEGER DEFAULT 1,
+    source      TEXT,
+    keywords    TEXT,           -- 命中的关键词(JSON 数组),供 M5 关键词调优
+    fetched_at  TEXT,
+    created_at  TEXT DEFAULT (datetime('now','localtime')),
+    UNIQUE (trade_date, text)
+);
+
+CREATE TABLE IF NOT EXISTS catalyst_verification (
+    news_id     INTEGER NOT NULL,     -- 关联 important_news.id
+    n_day       INTEGER NOT NULL,     -- 3 / 20
+    outcome     TEXT NOT NULL,        -- 应验|部分应验|未应验|无法判定
+    evidence    TEXT,
+    excess      REAL,                 -- 板块N日超额(相对上证),供 stats/alpha
+    verified_at TEXT DEFAULT (datetime('now','localtime')),
+    PRIMARY KEY (news_id, n_day)
+);
+
+-- 盘中深入分析 v2.0(M1' 归档 + 盘后增量4 建议验证):建议存档 / 建议验证 / 持仓卡
+CREATE TABLE IF NOT EXISTS advice_archive (
+    id           INTEGER PRIMARY KEY AUTOINCREMENT,
+    trade_date   TEXT NOT NULL,
+    symbol       TEXT NOT NULL,
+    created_at   TEXT NOT NULL,       -- 生成时点 HH:MM
+    anchor_price REAL,                -- 决策锚定价(当日固定)
+    scenario     TEXT,                -- 五级场景:破位/突破异动日/变盘前兆/区间震荡/趋势
+    state_word   TEXT,                -- 状态词(布尔词汇表白名单)
+    risk_level   TEXT,                -- 正常/关注/升级(风险上升语义,三段式 §4.3)
+    category     TEXT,                -- 建议类别:加仓/买入/试多|减仓/砍仓/清仓|持有/观望/等待确认
+    advice_md    TEXT,                -- 深入分析全文
+    snapshot_md  TEXT,                -- 数据快照全文(白名单源)
+    degraded     INTEGER DEFAULT 0,   -- 1=降级规则信号
+    verdict      TEXT                 -- 盘后增量4 回填:应验/部分应验/未应验/无法判定
+);
+
+CREATE TABLE IF NOT EXISTS advice_verification (
+    archive_id  INTEGER NOT NULL,     -- 关联 advice_archive.id
+    n_day       INTEGER NOT NULL,     -- 1 / 3 / 5 / 10(默认 5 为主、3 参考,1/10 为短线/中期参考)
+    outcome     TEXT NOT NULL,        -- 应验|部分应验|未应验|无法判定
+    move_pct    REAL,                 -- N日后收盘相对锚定价涨跌%
+    evidence    TEXT,
+    direction_correct INTEGER          -- 方向对错(借鉴 decision_signal:应验/部分应验=1,未应验=0,无法判定=NULL)
+    verified_at TEXT DEFAULT (datetime('now','localtime')),
+    PRIMARY KEY (archive_id, n_day)
+);
+
+CREATE TABLE IF NOT EXISTS holdings (
+    symbol     TEXT PRIMARY KEY,      -- ETF 代码
+    name       TEXT,
+    cost       REAL NOT NULL,         -- 单位成本(前复权口径)
+    quantity   INTEGER NOT NULL,      -- 股数
+    status     TEXT DEFAULT '持仓',   -- 持仓/锚点(100股)/观察
+    updated_at TEXT DEFAULT (datetime('now','localtime'))
+);
+
+CREATE TABLE IF NOT EXISTS account_meta (
+    key   TEXT PRIMARY KEY,           -- total_capital / cash / ...
+    value TEXT NOT NULL,
+    updated_at TEXT DEFAULT (datetime('now','localtime'))
+);
 """
 
 # 固定列顺序,供 upsert 使用
@@ -187,7 +258,17 @@ CATALYST_ANOMALY_COLUMNS = ["trade_date", "thscode", "stock_name", "tag_name",
 CATALYST_HOT_COLUMNS = ["trade_date", "thscode", "name", "rank", "heat", "rank_change", "symbol"]
 SIGNAL_LOG_COLUMNS = ["trade_date", "symbol", "kind", "signal", "state", "price",
                       "support", "resistance", "note", "result"]
-CATALYST_STATUS_COLUMNS = ["trade_date", "symbol", "status", "reason"]
+CATALYST_STATUS_COLUMNS = ["trade_date", "symbol", "status", "reason",
+                           "impact", "confidence", "type", "source_grade", "cross", "fetched_at"]
+
+_CATALYST_STATUS_EXTRA = {
+    "impact": "TEXT",
+    "confidence": "TEXT",
+    "type": "TEXT",
+    "source_grade": "TEXT",
+    "cross": "INTEGER",
+    "fetched_at": "TEXT",
+}
 
 
 def connect(db_path: str | Path = DEFAULT_DB) -> sqlite3.Connection:
@@ -201,7 +282,16 @@ def connect(db_path: str | Path = DEFAULT_DB) -> sqlite3.Connection:
 
 def init_db(conn: sqlite3.Connection) -> None:
     conn.executescript(_SCHEMA)
+    _migrate_catalyst_status(conn)
     conn.commit()
+
+
+def _migrate_catalyst_status(conn: sqlite3.Connection) -> None:
+    """catalyst_status 扩列(方案 M4):已有库 ALTER 补列(impact/confidence/type 等)。"""
+    cols = {r["name"] for r in conn.execute("PRAGMA table_info(catalyst_status)").fetchall()}
+    for name, decl in _CATALYST_STATUS_EXTRA.items():
+        if name not in cols:
+            conn.execute(f"ALTER TABLE catalyst_status ADD COLUMN {name} {decl}")
 
 
 def upsert_rows(

@@ -29,10 +29,13 @@ const app = createApp({
       infoStats: null,
       // 盘中技术快照(2026-08-22,与作战地图解耦)
       techCode: "",           // 当前选中的快照标的
-      // 盘后生成(里程碑4)
-      closeMd: "",
-      closeError: "",
-      closeLoading: false,
+      // 盘后建议验证(增量4 MVP:懒验证 + 日历,零任务零推送)
+      vcDays: [],            // [{trade_date, items:[{symbol,name,anchor_price,state_word,category,signal_type,summary,degraded,out3,move3,out5,move5}]}]
+      vcError: "",
+      vcLoading: false,
+      vcOpenDay: "",         // 展开详情的日期
+      vcLoaded: false,       // 已拉取过(切 tab 不再重复触发)
+      verifiedNote: "",      // 本次补判条数提示(如"本次补判 N 条到期建议")
       // 盘前生成(里程碑2)
       pbDraft: null,
       pbMarkdown: "",
@@ -90,9 +93,12 @@ const app = createApp({
       snapFacts: "",          // 卡1 数据快照(程序计算,不经过 LLM)
       snapFactsError: "",
       snapFactsLoading: false,
+      snapAt: "",             // 最近一次快照数据时点(HH:MM)
       snapAnalysis: "",       // 卡2 深入分析(LLM 多周期矛盾推演)
       snapAnalysisError: "",
       snapAnalysisLoading: false,
+      snapAnalysisAt: "",     // 深入分析基于的数据时点(HH:MM,30s 缓存/自动刷新)
+      snapSignal: null,       // 一句话信号(确定性,规则引擎,与盘后验证同源)
       cfMarkdown: "",         // 卡3 反事实推演(盘后·情景分支,手动触发,非建议)
       cfError: "",
       cfLoading: false,
@@ -220,6 +226,16 @@ const app = createApp({
     todayStr() {
       return this.mgNews?.date || new Date().toISOString().slice(0, 10);
     },
+    // 盘后验证:当前展开日期的建议明细
+    vcDayItems() {
+      const d = this.vcDays.find((x) => x.trade_date === this.vcOpenDay);
+      return d ? d.items : [];
+    },
+    // 一句话信号两行拆分:第一句=现价·状态;其余=动作链(前端展示用,内容仍为确定性)
+    l1Lines() {
+      const s = this.snapSignal && this.snapSignal.one_sentence;
+      return this.splitSentence(s);
+    },
     levelLines() {
       const ins = this.currentInstrument();
       if (!ins) return [];
@@ -276,7 +292,7 @@ const app = createApp({
       const ins = (this.bm?.instruments || []).find((i) => i.code === sym);
       return !!(ins && ins.levels && ins.levels.length);
     },
-    setTab(t) { this.tab = t; this.view = ""; },
+    setTab(t) { this.tab = t; this.view = ""; if (t === "ph") this.loadVerifyCalendar(); },
     toggleView(v) {
       this.view = this.view === v ? "" : v;
       if (this.view === "bt") this.initBtChart();
@@ -796,14 +812,9 @@ const app = createApp({
       this.startPolling();
     },
 
-    // ---- 盘中技术快照(数据快照 + 深入分析,两张卡独立加载,2026-08-22) ----
-    async loadTechSnapshot() {
-      if (!this.techCode) return;
-      this.snapError = "";
-      // 并行发两个请求:数据卡(确定性,毫秒级)先渲染,分析卡(LLM,10-20秒)后渲染。
-      // 两卡完全独立——LLM 失败/幻觉时,数据快照照常展示、不受影响。
-      await Promise.all([this.loadTechFacts(), this.loadTechAnalysis()]);
-    },
+    // ---- 盘中技术快照(数据快照 + 深入分析,两卡独立,2026-08-22 / 09-01 重构) ----
+    // 2026-09 数据流重构:刷新快照(秒级零 LLM,后台归档确定性建议)与深入分析
+    // (读取快照缓存 + LLM 扩展,30s 内不重复拉实时;无缓存自动先刷新)完全解耦。
     async loadTechFacts() {
       this.snapFacts = "";
       this.snapFactsError = "";
@@ -812,6 +823,12 @@ const app = createApp({
         const r = await api("/api/snapshot/tech/facts?code=" + this.techCode);
         if (!r.ok) { this.snapFactsError = r.error || "数据快照失败"; return; }
         this.snapFacts = r.markdown;
+        this.snapAt = r.data_at || "";
+        this.snapSignal = r.signal || null;   // 一句话信号(更新即刷新,零 LLM)
+        // 新快照 → 旧分析失效(避免"分析基于旧数据"的误解),清空待重新分析
+        this.snapAnalysis = "";
+        this.snapAnalysisError = "";
+        this.snapAnalysisAt = "";
         this.applyFactsToPanel(this.techCode, r);   // 联动:侧栏按钮同时刷新面板标记
       } catch (e) { this.snapFactsError = String(e); }
       finally { this.snapFactsLoading = false; }
@@ -824,6 +841,7 @@ const app = createApp({
         const r = await api("/api/snapshot/tech/analysis?code=" + this.techCode);
         if (!r.ok) { this.snapAnalysisError = r.error || "深入分析失败"; return; }
         this.snapAnalysis = r.markdown;   // degraded 时 markdown 内已含降级提示
+        this.snapAnalysisAt = r.data_at || this.snapAt || "";
       } catch (e) { this.snapAnalysisError = String(e); }
       finally { this.snapAnalysisLoading = false; }
     },
@@ -925,6 +943,8 @@ const app = createApp({
         const r = await api("/api/snapshot/tech/facts?code=" + sym);
         if (r.ok) {
           this.snapFacts = r.markdown;                 // 侧栏数据快照卡
+          this.snapAt = r.data_at || "";               // 快照时点(卡头展示)
+          this.snapSignal = r.signal || null;          // 一句话信号
           this.applyFactsToPanel(sym, r);              // 面板标记
         } else {
           this.snapError = (r.error || "该标的快照失败") + " — 面板该行暂不更新";
@@ -1303,18 +1323,61 @@ const app = createApp({
         lineStyle: { color: "#e8b339", type: "dashed" },
       };
     },
-    // ---- 盘后生成(里程碑4) ----
-    async loadClose() {
-      this.closeError = "";
-      this.closeMd = "";
-      this.closeLoading = true;
+    // ---- 盘后建议验证(增量4 MVP:懒验证 + 日历) ----
+    async loadVerifyCalendar(force = false) {
+      if (this.vcLoading) return;
+      if (!force && this.vcLoaded) return;
+      this.vcError = "";
+      this.vcLoading = true;
       try {
-        const r = await api("/api/close");
-        if (!r.ok) { this.closeError = r.error || "盘后生成失败"; return; }
-        this.closeMd = r.markdown;
+        const r = await api("/api/verify/calendar");
+        if (!r.ok) { this.vcError = r.error || "验证日历加载失败"; return; }
+        this.vcDays = r.days || [];
+        this.verifiedNote = r.verified > 0 ? `本次补判 ${r.verified} 条到期建议` : "";
+        this.vcLoaded = true;
+        this.vcOpenDay = "";
       } finally {
-        this.closeLoading = false;
+        this.vcLoading = false;
       }
+    },
+    // 色块:默认 5 日窗口为主(应验/部分应验=绿,未应验=红,其余=灰)
+    // 色块二维编码(2026-09 用户拍板):观望=灰虚线(留痕不验证);有方向=彩色块
+    // (待判=蓝框,应验=绿实心,未应验=红实心)。默认 5 日窗口为主。
+    vcCls(it, win = "5") {
+      if (!it.direction) return "vc-watch";
+      const out = win === "3" ? it.out3 : it.out5;
+      if (out === "应验" || out === "部分应验") return "vc-ok";
+      if (out === "未应验") return "vc-bad";
+      return "vc-pend";
+    },
+    vcOut(it) {
+      if (!it.direction) return "观望";
+      const o = it.out5;
+      if (!o) return "待定";
+      return o === "部分应验" ? "部分" : o;
+    },
+    vcTitle(it) {
+      const mv = (v) => (v == null ? "" : ` 涨跌${v > 0 ? "+" : ""}${v}%`);
+      const head = `${this.shortName(it.name) || it.symbol} · ${it.category || ""} ${it.state_word || ""}`;
+      if (!it.direction) return `${head}\n无方向(观望/持有) · 不参与验证,仅留痕`;
+      const d3 = it.out3 == null ? "未到期" : `${it.out3}${mv(it.move3)}`;
+      const d5 = it.out5 == null ? "未到期" : `${it.out5}${mv(it.move5)}`;
+      return `${head}\n锚定价 ${it.anchor_price}\n3日 ${d3}\n5日 ${d5}`;
+    },
+    shortDay(dt) { return dt ? dt.slice(5).replace("-", "/") : ""; },
+    weekdayCN(dt) {
+      if (!dt) return "";
+      return "周" + "日一二三四五六"[new Date(dt + "T00:00:00").getDay()];
+    },
+    fmtPx(v) { return v == null ? "-" : Number(v).toFixed(3); },
+    fmtMove(v) { return v == null ? "" : ` 涨跌${v > 0 ? "+" : ""}${v}%`; },
+    // 一句话拆分(方法,模板可带参数调用):第一句=现价·状态;其余=动作链
+    splitSentence(s) {
+      if (!s) return null;
+      const i = s.indexOf("。");
+      if (i <= 0) return { head: s, acts: "" };
+      return { head: s.slice(0, i),
+               acts: s.slice(i + 1).trim().replace(/。$/, "").trim() };
     },
 
     // ---- 作战地图 ----

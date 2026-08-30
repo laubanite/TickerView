@@ -197,37 +197,47 @@
         </div>
         <div v-if="snapError" class="error">{{snapError}}</div>
         <div class="btn-row">
-          <button class="btn" @click="loadTechSnapshot"
-                  :disabled="snapFactsLoading || snapAnalysisLoading || !techCode"><svg class="bi" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/></svg>生成盘中快照</button>
+          <button class="btn" @click="loadTechFacts"
+                  :disabled="snapFactsLoading || !techCode" title="拉取实时数据,秒级零 LLM;同时后台自动生成并归档当日确定性建议(盘后验证的数据源)"><svg class="bi" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/></svg>刷新快照<span v-if="snapAt" class="dim" style="font-size:11px;margin-left:6px">{{snapAt}}</span></button>
+          <button class="btn" @click="loadTechAnalysis"
+                  :disabled="snapAnalysisLoading || !techCode" title="读取最近一次快照缓存 + LLM 扩展(30 秒内不重复拉实时;无缓存自动先刷新)"><svg class="bi" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M2 3h6a4 4 0 0 1 4 4v14a3 3 0 0 0-3-3H2z"/><path d="M22 3h-6a4 4 0 0 0-4 4v14a3 3 0 0 1 3-3h7z"/></svg>深入分析</button>
           <button class="btn" @click="runCounterfactual"
                   :disabled="cfLoading || !techCode" title="收盘后手动运行:若跌破/站上 迁移表推演(情境分支,非建议)"><svg class="bi" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><line x1="6" y1="3" x2="6" y2="15"/><circle cx="18" cy="6" r="3"/><circle cx="6" cy="18" r="3"/><path d="M18 9a9 9 0 0 1-9 9"/></svg>收盘反事实推演</button>
-          <!-- 推送到手机:入口已移除,功能延后到更高版本(app.js pushSnapshot / /api/snapshot/push 保留) -->
+        </div>
+
+        <!-- L1 一句话信号(规则引擎确定性,与盘后验证同源;刷新快照后显示) -->
+        <div class="sub-card l1-card" v-if="snapSignal && snapSignal.one_sentence" style="margin-top:10px">
+          <h3>一句话信号 <span class="dim">规则引擎 · 零 LLM · {{snapAt || '—'}}<template v-if="snapSignal.risk_level"> · 风险 {{snapSignal.risk_level}}</template></span></h3>
+          <div class="l1-main" v-if="l1Lines">
+            <div class="l1-line">{{l1Lines.head}}</div>
+            <div class="l1-acts">{{l1Lines.acts}}</div>
+          </div>
         </div>
 
         <!-- 卡1:数据快照(程序计算 · 可复核,与 LLM 完全独立) -->
         <div class="sub-card tech-card" style="margin-top:10px">
-          <h3>数据快照 <span class="dim">程序计算 · 可复核</span></h3>
+          <h3>数据快照 <span class="dim">程序计算 · 可复核 · {{snapAt || '未刷新'}}</span></h3>
           <div class="scrolly">
             <div v-if="snapFactsError" class="error">{{snapFactsError}}</div>
             <div v-if="snapFactsLoading && !snapFacts" class="skeleton"></div>
             <div v-if="snapFacts" class="shot" v-html="mdToHtml(snapFacts)"></div>
             <div v-if="!snapFactsLoading && !snapFacts && !snapFactsError" class="empty">
               <svg class="e-ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="2"/><path d="M8 17v-4"/><path d="M12 17v-7"/><path d="M16 17v-2"/></svg>
-              <div class="e-t">还没有数据快照</div><div class="e-h">点击上方「生成盘中快照」获取实时数据。</div>
+              <div class="e-t">还没有数据快照</div><div class="e-h">点击上方「刷新快照」获取实时数据(秒级,零 LLM,同时归档当日确定性建议)。</div>
             </div>
           </div>
         </div>
 
         <!-- 卡2:深入分析(LLM 多周期矛盾推演,失败时降级确定性信号) -->
         <div class="sub-card tech-card tech-card-analysis" style="margin-top:10px">
-          <h3>深入分析 <span class="dim">LLM 多周期矛盾推演</span></h3>
+          <h3>深入分析 <span class="dim">LLM 多周期矛盾推演 · 基于 {{snapAnalysisAt || '—'}} 数据</span></h3>
           <div class="scrolly">
             <div v-if="snapAnalysisError" class="error">{{snapAnalysisError}}</div>
             <div v-if="snapAnalysisLoading && !snapAnalysis" class="skeleton"></div>
             <div v-if="snapAnalysis" class="shot" v-html="mdToHtml(snapAnalysis)"></div>
             <div v-if="!snapAnalysisLoading && !snapAnalysis && !snapAnalysisError" class="empty">
               <svg class="e-ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><path d="M14 2v6h6"/><line x1="8" y1="13" x2="16" y2="13"/><line x1="8" y1="17" x2="16" y2="17"/></svg>
-              <div class="e-t">还没有深入分析</div><div class="e-h">点击上方「生成盘中快照」生成 LLM 多周期矛盾推演。</div>
+              <div class="e-t">还没有深入分析</div><div class="e-h">点击上方「深入分析」读取最近快照生成 LLM 多周期矛盾推演;无快照时自动先刷新。</div>
             </div>
           </div>
         </div>
@@ -247,17 +257,57 @@
         </div>
       </div>
 
-      <!-- 盘后 -->
+      <!-- 盘后:建议验证日历(MVP:绿=应验 红=未应验 灰=未到期/无方向;点击日期展开详情) -->
       <div class="card side" :class="{on: tab==='ph'}">
-        <h3>收盘对账 <span class="dim">规则事实 + LLM 复盘五问</span></h3>
-        <div v-if="closeError" class="error">{{closeError}}</div>
-        <div v-if="closeLoading" class="loading">生成中(拉取收盘数据 + LLM 复盘,约 10 秒)…</div>
-        <div v-else-if="closeMd" class="shot" v-html="mdToHtml(closeMd)"></div>
-        <div v-else class="empty">
-          <svg class="e-ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="3" width="16" height="18" rx="2"/><line x1="9" y1="8" x2="15" y2="8"/><line x1="9" y1="12" x2="15" y2="12"/><line x1="9" y1="16" x2="13" y2="16"/></svg>
-          <div class="e-t">还没有收盘对账</div><div class="e-h">点击下方「生成收盘对账」:大盘关键位攻防 → 各标的「剧本 vs 实际」→ 复盘五问 + 纪律评分。</div>
+        <h3>建议验证 <span class="dim">绿=应验 · 红=未应验 · 蓝框=方向待定 · 灰虚线=观望不验证</span>
+          <span style="flex:1"></span>
+          <button class="icon-btn" @click="loadVerifyCalendar(true)" :disabled="vcLoading" title="刷新验证日历">
+            <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><polyline points="23 4 23 10 17 10"/><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"/></svg>
+          </button>
+        </h3>
+        <div v-if="vcError" class="error">{{vcError}}</div>
+        <div v-if="vcLoading" class="loading"><span class="spinner-dot"></span> 补判到期建议 + 拉取验证日历…</div>
+        <template v-else-if="vcDays.length">
+          <div v-if="verifiedNote" class="dim" style="font-size:11px;margin:2px 0 8px">{{verifiedNote}}</div>
+          <div class="vc-grid">
+            <div v-for="d in vcDays" :key="d.trade_date" class="vc-day" :class="{open: vcOpenDay===d.trade_date}"
+                 @click="vcOpenDay = (vcOpenDay===d.trade_date ? '' : d.trade_date)">
+              <div class="vc-date">{{shortDay(d.trade_date)}}<span class="dim">{{weekdayCN(d.trade_date)}}</span></div>
+              <div class="vc-cols">
+                <div v-for="it in d.items" :key="d.trade_date+it.symbol" class="vc-cell" :class="vcCls(it)" :title="vcTitle(it)">
+                  <span class="vc-sym">{{shortName(it.name) || it.symbol}}</span>
+                  <span class="vc-out">{{vcOut(it)}}</span>
+                </div>
+              </div>
+            </div>
+          </div>
+          <div v-if="vcOpenDay" class="vc-detail">
+            <div class="vc-dhead">{{vcOpenDay}}<span class="dim" style="font-size:11px"> · 点击日期收起</span></div>
+            <div v-for="it in vcDayItems" :key="it.symbol" class="vc-item">
+              <div class="vc-item-head">{{shortName(it.name) || it.symbol}}<b>{{it.category}}</b>
+                <span class="dim">{{it.state_word}}</span>
+                <span v-if="it.signal_type" class="tag t-normal">{{it.signal_type}}</span>
+                <span v-if="it.degraded" class="tag t-warn">降级信号</span>
+              </div>
+              <div class="dim" style="font-size:11px">锚定价 {{fmtPx(it.anchor_price)}}</div>
+              <div class="vc-item-rs" v-if="it.direction">
+                <span class="vc-r" :class="vcCls(it,'3')">3日·{{it.out3 || '待定'}}{{fmtMove(it.move3)}}</span>
+                <span class="vc-r" :class="vcCls(it,'5')">5日·{{it.out5 || '待定'}}{{fmtMove(it.move5)}}</span>
+              </div>
+              <div class="dim" style="font-size:11px" v-else>无方向(观望/持有) · 不参与验证,仅留痕</div>
+              <div class="vc-item-md" v-if="splitSentence(it.one_sentence)">
+                <div>{{splitSentence(it.one_sentence).head}}</div>
+                <div v-if="splitSentence(it.one_sentence).acts" class="dim" style="margin-top:2px">{{splitSentence(it.one_sentence).acts}}</div>
+              </div>
+              <div class="vc-item-md dim" v-else-if="it.summary">{{it.summary}}</div>
+            </div>
+          </div>
+        </template>
+        <div v-else-if="!vcLoading" class="empty">
+          <svg class="e-ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="18" rx="2"/><line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="3" y1="10" x2="21" y2="10"/></svg>
+          <div class="e-t">还没有已归档的建议</div>
+          <div class="e-h">盘中每次「刷新快照」自动归档当日建议;有方向的会在此验证(3/5 日后出结果),观望的以灰虚线留痕。</div>
         </div>
-        <button class="btn" @click="loadClose" :disabled="closeLoading"><svg class="bi" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><polyline points="9 11 12 14 22 4"/><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"/></svg>生成收盘对账</button>
       </div>
 
       <!-- 设置:已重构为居中弹窗(Modal),见下方 .set-modal(模型 / 持仓 / 通用) -->

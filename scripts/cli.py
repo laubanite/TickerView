@@ -600,6 +600,21 @@ def cmd_close(args) -> int:
     return 0
 
 
+def cmd_counterfactual(args) -> int:
+    """反事实推演(盘后·情景分支,2026-08-26):收盘快照 + 确定性迁移表 → LLM 情景推演。
+
+    建议收盘后手动运行;LLM 失败降级为纯迁移表(零幻觉)。输出非投资建议。
+    """
+    from alphaprism.planner.intraday import build_counterfactual
+
+    for code in args.codes:
+        md, ok = build_counterfactual(str(code).split(".")[0], scenario=args.scenario)
+        print(f"===== {code} (LLM 情景推演 ok={ok}) =====")
+        print(md)
+        print()
+    return 0
+
+
 def cmd_playbook(args) -> int:
     """盘前生成(里程碑2):剧本草稿 → 人工确认 → 追加写入作战地图「每日盯盘记录」。"""
     path = args.path or _default_battlemap_path()
@@ -830,6 +845,11 @@ def main() -> int:
     p.add_argument("path", nargs="?", help="作战地图 .md 路径(默认 config 或 AITrader 最新)")
     p.add_argument("--write", action="store_true", help="追加写入作战地图每日盯盘记录(默认只打印)")
     p.set_defaults(func=cmd_close)
+
+    p = sub.add_parser("counterfactual", help="反事实推演(盘后·情景分支):收盘快照+迁移表→LLM 情景推演")
+    p.add_argument("codes", nargs="+", help="标的代码(如 515790)")
+    p.add_argument("--scenario", default=None, help="情景描述(如 '大盘明日跌破 3850')")
+    p.set_defaults(func=cmd_counterfactual)
 
     p = sub.add_parser("playbook", help="盘前生成(里程碑2):剧本草稿→确认→追加写入作战地图")
     p.add_argument("path", nargs="?", help="作战地图 .md 路径(默认 config 或 AITrader 最新)")

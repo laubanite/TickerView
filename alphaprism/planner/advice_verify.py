@@ -94,8 +94,10 @@ def run_advice_verification() -> int:
         pass
     done = 0
     try:
+        # 重试语义:verdict=NULL(从未判)或 无法判定(上次数据不足/无方向)都重新尝试;
+        # 无方向建议(持有/观望)每次重判结果仍为 无法判定,幂等无害。
         archives = [dict(r) for r in conn.execute(
-            "SELECT * FROM advice_archive WHERE verdict IS NULL ORDER BY id")]
+            "SELECT * FROM advice_archive WHERE verdict IS NULL OR verdict='无法判定' ORDER BY id")]
         for arch in archives:
             for n in HORIZONS:
                 outcome, move, correct = _verify_one(conn, arch, n)

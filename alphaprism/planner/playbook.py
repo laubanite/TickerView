@@ -16,9 +16,9 @@ from datetime import date, datetime
 from typing import Any
 
 from ..config import Config
-from ..db import connect
+from ..db import connect, init_db
 from ..fetchers import news as news_mod
-from ..morning import _build_context, _yesterday_status
+from ..morning import _build_context, _llm_important_news, _rule_important_news, _yesterday_status
 from .rulemodel import RuleModel
 
 logger = logging.getLogger(__name__)
@@ -240,116 +240,94 @@ def build_morning_view(model: RuleModel, cfg: Config | None = None) -> dict:
     cfg = cfg or Config()
     conn = connect()
     try:
+        init_db(conn)   # 确保 important_news/catalyst_verification 等表存在(幂等)
         ctx = _build_context(cfg, conn)
         sectors = ctx["sectors"]
         prev = _yesterday_status(conn)
+        news_health = ctx.get("news_health")
+
+        rows = _instrument_contexts(model, sectors)
+
+        # ① 隔夜重要消息:复用 _build_context 的抓取结果(含健康状态),避免二次抓取
+        feed = ctx.get("feed") or []
+        kws = cfg.get("news", "keywords", default={}) or {}
+        if news_health and (news_health.get("all_failed") or news_health.get("stale")):
+            # 数据源不可用 / 陈旧:坏数据不进列表,消息区留空由前端显示诚实文案
+            important = {"summary": "", "items": []}
+        else:
+            sector_hits = news_mod.filter_by_keywords(feed, kws)
+            sector_names = sorted({r["sector"] for r in rows if r["sector"]})
+            from ..morning import _sector_perf
+            from ..morning_verify import prior_prompt
+
+            important = _llm_important_news(feed, sector_hits, sector_names, cfg,
+                                            prior=prior_prompt(conn),
+                                            sector_perf=_sector_perf(conn, {r["sector"]: r["code"] for r in rows}))
+            if not important.get("items"):
+                important = _rule_important_news(sector_hits, sector_names)
+        # 持久化当日重要消息(供 M4 验证)+ 顺手跑到期验证(幂等)
+        _persist_important_news(conn, important, rows, cfg)
+        _run_verification(conn)
+
+        # ② 剧本(唯一可编辑真源) + ③ 今日纪律(消息面催化驱动)
+        pp = _llm_playbook_discipline(model, rows, important, cfg)
+        playbook = pp.get("playbook") or _fallback_rows(rows)
+        discipline = pp.get("discipline") or _fallback_discipline(model)
+        # 保证每只标的都有行(LLM 覆盖不全时用规则模板补齐)
+        playbook = _merge_missing(playbook, _fallback_rows(rows))
+
+        g = model.global_.market_gate
+        return {
+            "date": date.today().isoformat(),
+            "summary": important.get("summary", ""),
+            "gate": {"conclusion": g.conclusion or "",
+                     "rules": [{"condition": r.condition, "action": r.action} for r in g.rules]},
+            "news": important,
+            "news_health": news_health,
+            "playbook": playbook,
+            "discipline": discipline,
+        }
     finally:
         conn.close()
 
-    rows = _instrument_contexts(model, sectors)
 
-    # ① 隔夜重要消息:新浪 + 东财双源实时抓取 + LLM 提取
-    kws = cfg.get("news", "keywords", default={}) or {}
-    feed = news_mod.fetch_all_feeds(
-        pages=cfg.get("news", "pages", default=1),
-        page_size=cfg.get("news", "page_size", default=50),
-    )
-    sector_hits = news_mod.filter_by_keywords(feed, kws)
-    important = _llm_important_news(feed, sector_hits, rows, cfg)
-    if not important.get("items"):
-        important = _rule_important_news(sector_hits, rows)
+def _persist_important_news(conn, important: dict, rows: list[dict], cfg) -> None:
+    """当日重要消息写入 important_news(方案 M4,验证输入)。按 (trade_date, text) upsert。"""
+    from ..morning_verify import verify_pending  # noqa: F401 (调用方 _run_verification 再引)
 
-    # ② 剧本(唯一可编辑真源) + ③ 今日纪律(消息面催化驱动)
-    pp = _llm_playbook_discipline(model, rows, important, cfg)
-    playbook = pp.get("playbook") or _fallback_rows(rows)
-    discipline = pp.get("discipline") or _fallback_discipline(model)
-    # 保证每只标的都有行(LLM 覆盖不全时用规则模板补齐)
-    playbook = _merge_missing(playbook, _fallback_rows(rows))
-
-    g = model.global_.market_gate
-    return {
-        "date": date.today().isoformat(),
-        "summary": important.get("summary", ""),
-        "gate": {"conclusion": g.conclusion or "",
-                 "rules": [{"condition": r.condition, "action": r.action} for r in g.rules]},
-        "news": important,
-        "playbook": playbook,
-        "discipline": discipline,
-    }
-
-
-# ---------------------------------------------------------------- ① 隔夜重要消息
-
-_IMPACT_ORDER = {"利空": 0, "利好": 1, "中性": 2}
-
-
-def _llm_important_news(feed: list[dict], sector_hits: dict[str, list[dict]],
-                        rows: list[dict], cfg) -> dict:
-    """LLM 从新浪+东财快讯里挑重要新闻,分类 利空/利好/中性 并关联板块。失败返回 {}。"""
-    from ..llm import chat
-
-    sectors_names = sorted({r["sector"] for r in rows if r["sector"]})
-    lines = ["你是 A股中长线交易系统的盘前新闻助理。下面是 新浪7x24 + 东方财富快讯(时间倒序,"
-             "已标注来源)。跟踪板块: " + ("、".join(sectors_names) or "无") + " + 大盘。"]
-    lines.append("请挑出对以上板块或大盘**最重要**的 5-8 条新闻:")
-    lines.append("- 每条压缩到 60 字以内;标注 影响(利好/利空/中性)、关联板块(可填 大盘/其他)"
-                 "与来源(新浪/东财);用一句话 reason 说明为什么重要")
-    lines.append("- **优先选宏观/政策/大盘方向/行业级(涨价、扩产、政策、龙头业绩)消息**;"
-                 "忽略单个公司注册/股权/琐事、娱乐、重复新闻;宁少勿滥")
-    lines.append("\n【快讯】")
-    for it in feed[:40]:
-        src = "东财" if it.get("tag") else "新浪"
-        lines.append(f"- [{src}] {it['time'][5:16]} {it['text'][:90]}")
-    lines.append("\n只输出 JSON:")
-    lines.append('{"summary":"一句话盘面综述", "items":[{"time":"08:30","text":"...","impact":"利好|利空|中性",'
-                 '"sector":"化工|大盘|其他","source":"新浪|东财","reason":"..."}]}')
-    prompt = "\n".join(lines)
-    try:
-        text = chat([{"role": "user", "content": prompt}], cfg=cfg, temperature=0.2, max_tokens=1200)
+    kws_map = cfg.get("news", "keywords", default={}) or {}
+    all_kws = sorted({k for ks in kws_map.values() for k in ks})
+    sector2sym = {r["sector"]: r["code"] for r in rows if r["sector"]}
+    today = date.today().isoformat()
+    now = datetime.now().isoformat(timespec="seconds")
+    for it in (important.get("items") or []):
+        text = (it.get("text") or "").strip()
         if not text:
-            return {}
-        start, end = text.find("{"), text.rfind("}")
-        data = json.loads(text[start:end + 1])
-        out = []
-        for it in (data.get("items") or [])[:8]:
-            impact = it.get("impact", "中性")
-            if impact not in _IMPACT_ORDER:
-                impact = "中性"
-            out.append({
-                "time": (it.get("time") or "")[:5],
-                "text": (it.get("text") or "").strip()[:80],
-                "impact": impact,
-                "sector": it.get("sector") or "其他",
-                "source": (it.get("source") or "新浪")[:4],
-                "reason": (it.get("reason") or "").strip()[:50],
-            })
-        out.sort(key=lambda x: _IMPACT_ORDER.get(x["impact"], 9))
-        return {"summary": (data.get("summary") or "").strip(), "items": out}
-    except Exception as exc:  # noqa: BLE001
-        logger.warning("重要新闻 LLM 解析失败: %s", exc)
-        return {}
-
-
-def _rule_important_news(sector_hits: dict[str, list[dict]], rows: list[dict]) -> dict:
-    """LLM 不可用的降级:每板块取最近 1-2 条命中原文,影响标中性(不编造判断)。"""
-    items: list[dict] = []
-    for r in rows:
-        sector = r["sector"]
-        if not sector:
             continue
-        for it in (sector_hits.get(sector) or [])[:2]:
-            items.append({
-                "time": it.get("time", "")[5:16][:5] if it.get("time") else "",
-                "text": (it.get("text") or "")[:80],
-                "impact": "中性",
-                "sector": sector,
-                "source": "新浪" if it.get("tag") else "东财",
-                "reason": "板块关键词命中(LLM 未启用,人工判断)",
-            })
-    if not items:
-        items.append({"time": "", "text": "暂无板块相关重要新闻", "impact": "中性",
-                      "sector": "其他", "reason": "新浪7x24 关键词无命中"})
-    return {"summary": f"共 {len(items)} 条板块相关新闻(降级:LLM 未启用)", "items": items}
+        hit_kws = [k for k in all_kws if k in text]
+        conn.execute(
+            "INSERT INTO important_news (trade_date, sector, symbol, text, impact, confidence, "
+            "type, source_grade, cross, source, keywords, fetched_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?) "
+            "ON CONFLICT(trade_date, text) DO UPDATE SET impact=excluded.impact, "
+            "confidence=excluded.confidence, type=excluded.type, source_grade=excluded.source_grade, "
+            "cross=excluded.cross, keywords=excluded.keywords",
+            (today, it.get("sector") or "其他", sector2sym.get(it.get("sector")),
+             text, it.get("impact", "中性"), it.get("confidence"), it.get("type"),
+             it.get("source_grade"), it.get("cross", 1), it.get("source"),
+             json.dumps(hit_kws, ensure_ascii=False), now))
+    conn.commit()
+
+
+def _run_verification(conn) -> None:
+    """到期催化判定跑 N 日验证(幂等)。失败不阻断盘前视图。"""
+    try:
+        from ..morning_verify import verify_pending
+
+        res = verify_pending(conn)
+        if res.get("verified"):
+            logger.info("催化验证新增 %d 条", res["verified"])
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("催化验证失败(不阻断视图): %s", exc)
 
 
 # ---------------------------------------------------------------- ②③ 剧本+预案
@@ -361,7 +339,9 @@ def _llm_playbook_discipline(model: RuleModel, rows: list[dict], important: dict
     lines = ["你是 A股中长线交易系统的盘前剧本与纪律助手。基于**隔夜重要新闻** + 作战地图关键位 + 技术面,"
              "为每只标的生成今日剧本(隔夜影响/今日动作),并给出**今日纪律**(结合消息面催化,"
              "不是照搬通用纪律——把利空/利好落到'今天具体怎么防/怎么等'上)。",
-             "规则:动作必须引用真实价位、用'若…则…'、不编造数字;剧本应体现消息面催化的影响。",
+             "规则:动作必须引用真实价位、用『价格→操作』格式(如『回踩0.855-0.860企稳→第一批10%』、"
+             "『放量突破0.90→观察升级』、『跌破减仓红线0.83→减1/3留一手』),不要用'若…则…'长句、"
+             "不编造数字;剧本应体现消息面催化的影响。",
              "纪律要求:**每条不超过 30 字、一句话、只讲今天最要紧的一条**,宁少勿滥(3-5 条)。"]
     lines.append("\n【盘面综述】")
     lines.append(f"- {important.get('summary') or '-'}")
@@ -397,7 +377,7 @@ def _llm_playbook_discipline(model: RuleModel, rows: list[dict], important: dict
         else:
             lines.append("  无新增消息/异动")
     lines.append("\n只输出 JSON,每只标的都要有 playbook 行;discipline 为 3-5 条今日纪律:")
-    lines.append('{"playbook":[{"code":"516020","overnight":"隔夜影响(1行)","action":"今日动作(若…则…)"}], '
+    lines.append('{"playbook":[{"code":"516020","overnight":"隔夜影响(1行)","action":"今日动作(价格→操作,引用具体价位)"}], '
                  '"discipline":["今日纪律1(结合消息面)","今日纪律2",...]}')
     prompt = "\n".join(lines)
     try:

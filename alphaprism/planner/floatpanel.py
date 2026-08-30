@@ -2,7 +2,8 @@
 
 只给结论,细节走快照:每行 现价 | 涨跌 | 放量/缩量 | 结论词(5档)+ 大盘门控灯。
 数据来源:check_live(核对引擎:实时快照 + 时间调整量比 + 大盘门控 J 值)。
-面板 JS 每 15 秒调 js_api.refresh() 拉最新核对;底部两按钮:
+面板 JS 按 config/web.yaml 的 refresh_interval_sec 秒(默认 12)调 js_api.refresh() 拉最新核对;
+底部两按钮:
 - [盘中快照] → js_api.snapshot()(规则事实 + LLM 解读,差异输出)
 - [展开行情页] → 打开 http://127.0.0.1:8765(需 Web 服务在跑)
 
@@ -119,7 +120,7 @@ PANEL_HTML = r"""<!DOCTYPE html>
   function openWeb() { pywebview.api.open_web(); }
   window.addEventListener('pywebviewready', () => {
     refresh();
-    setInterval(refresh, 15000);
+    setInterval(refresh, __REFRESH_MS__);
   });
 </script>
 </body>
@@ -182,8 +183,12 @@ def run_panel(cfg: Config | None = None) -> None:
     model = parse_battlemap(path)
     api = PanelAPI(model, cfg)
     try:
+        from ..webprefs import refresh_interval_sec
+
+        interval_ms = max(1000, int(refresh_interval_sec() * 1000))
+        html = PANEL_HTML.replace("__REFRESH_MS__", str(interval_ms))
         window = webview.create_window(
-            "AlphaPrism", html=PANEL_HTML, js_api=api,
+            "AlphaPrism", html=html, js_api=api,
             width=360, height=430, x=20, y=80,
             frameless=True, easy_drag=True, on_top=True, resizable=False,
         )
