@@ -44,8 +44,9 @@ const app = createApp({
       pbSaving: false,
       pbSaved: "",
       // 盘前视图(实时新闻 + LLM 提取,三块联动)
-      mgNews: null,          // {summary, items:[{time,text,impact,sector,reason,source}]}
+      mgNews: null,          // {summary, items:[{time,text,impact,sector,reason,source,pm_tag}]}
       mgHealth: null,        // {fetched_at, stale, latest_ts, all_failed, sources:[{source,ok,rows,error}]}
+      mgState: null,         // 市场状态卡(T1 盘前定级,盘前方案 v3.3):{level,name,hint,evidence,per_symbol,bonus,at}
       mgPlaybook: [],        // [{code,name,overnight,action}] 唯一可编辑真源
       mgDiscipline: [],      // [str] 今日纪律(消息面催化驱动)
       mgError: "",
@@ -1434,6 +1435,7 @@ const app = createApp({
         if (!r.ok) { this.mgError = r.error || "盘前视图生成失败"; return; }
         this.mgNews = r.news || null;
         this.mgHealth = r.news_health || null;
+        this.mgState = r.state || null;   // 市场状态灯(T1 纯消息定级)
         this.mgPlaybook = r.playbook || [];
         this.mgDiscipline = r.discipline || [];
       } finally {
@@ -1441,16 +1443,28 @@ const app = createApp({
       }
     },
     newsCls(impact) {
-      // A股配色:利好=红,利空=绿,中性=白
+      // 消息方向 = 通用语义(非价格):利好=绿(机会/绿灯行),利空=红(风险/红灯停)
       if (impact === "利好") return "nw up";
       if (impact === "利空") return "nw down";
       return "nw mid";
     },
     impactTag(impact) {
-      return impact === "利好" ? "🔴" : impact === "利空" ? "🟢" : "⚪";
+      return impact === "利好" ? "🟢" : impact === "利空" ? "🔴" : "⚪";
     },
     gradeTag(g) {
       return { 官方: "官", 媒体: "媒", 快讯: "快", 传闻: "闻" }[g] || g;
+    },
+    // 盘前状态灯点色(2026-09,交通灯语义,非涨跌语义)
+    stClass(level) {
+      return level === "red" ? "st-red" : level === "yellow" ? "st-yellow" : "st-green";
+    },
+    // 消息关键词命中标签配色:通用语义(与状态灯一致)——利空=红系(风险),利好=绿系(机会),中度=琥珀
+    pmTagCls(tag) {
+      if (!tag) return "";
+      if (tag.startsWith("利空·高危")) return "pm-bad";
+      if (tag.startsWith("利空·中度")) return "pm-warn";
+      if (tag.startsWith("利好")) return "pm-good";
+      return "";
     },
     async saveMorningPlaybook() {
       if (!this.mgPlaybook.length) return;

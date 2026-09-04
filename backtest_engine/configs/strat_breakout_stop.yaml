@@ -1,0 +1,14 @@
+# 影子对标策略(聚宽对照版,2022-2024 验证):只含买入+止损,不加仓不加减仓
+# 与 reference/joinquant_breakout_stop.py 逐笔一致:
+#   entry = 收盘价 > 前 20 根最高价(不含当日)→ 全仓买入(当日收盘成交)
+#   stop  = 收盘价 <= 成本价 × 0.92 → 清仓(当日收盘成交)
+# 佣金 万5 双边、滑点 0,与 engine.yaml 一致。
+name: breakout_stop_shadow
+indicators: []
+signals:
+  entry:
+    type: cross_above_prev_peak
+    lookback: 20
+  stop:
+    type: below_entry_pct
+    pct: 8.0

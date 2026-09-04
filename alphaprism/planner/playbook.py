@@ -276,6 +276,23 @@ def build_morning_view(model: RuleModel, cfg: Config | None = None) -> dict:
         # 保证每只标的都有行(LLM 覆盖不全时用规则模板补齐)
         playbook = _merge_missing(playbook, _fallback_rows(rows))
 
+        # 市场状态标签 T1(docs/盘前方案.md v3.3):纯消息定级 + 组合/标的小灯
+        from ..planner.prestate import compose_state
+        from ..config import WATCHLIST_FILE
+
+        watchlist: list[dict] = []
+        try:
+            if WATCHLIST_FILE.exists():
+                import yaml as _yaml
+                watchlist = list(_yaml.safe_load(WATCHLIST_FILE.read_text(encoding="utf-8")) or [])
+        except Exception:  # noqa: BLE001
+            watchlist = []
+        state = compose_state(important.get("items") or [], watchlist)
+        for it, tag in zip(important.get("items") or [], state.get("tags") or []):
+            it["pm_tag"] = tag          # 每条消息的词库命中标签(证据列表标注)
+        state.pop("tags", None)
+        _persist_pre_state(conn, state)
+
         g = model.global_.market_gate
         return {
             "date": date.today().isoformat(),
@@ -286,9 +303,33 @@ def build_morning_view(model: RuleModel, cfg: Config | None = None) -> dict:
             "news_health": news_health,
             "playbook": playbook,
             "discipline": discipline,
+            "state": state,
         }
     finally:
         conn.close()
+
+
+def _persist_pre_state(conn, state: dict) -> None:
+    """T1 定级写库(每日一份;盘中 C15 读取作当日下限,接线后置,docs/盘前方案.md §四)。
+
+    表:pre_state(trade_date 主键 → ON CONFLICT 覆盖),失败容忍(不影响盘前视图)。
+    """
+    try:
+        conn.execute(
+            "INSERT INTO pre_state (trade_date, level, name, hint, evidence,"
+            " per_symbol, hits, bonus, updated_at)"
+            " VALUES (?,?,?,?,?,?,?,?,datetime('now','localtime'))"
+            " ON CONFLICT(trade_date) DO UPDATE SET level=excluded.level, name=excluded.name,"
+            " hint=excluded.hint, evidence=excluded.evidence, per_symbol=excluded.per_symbol,"
+            " hits=excluded.hits, bonus=excluded.bonus, updated_at=excluded.updated_at",
+            (date.today().isoformat(), state["level"], state["name"], state["hint"],
+             json.dumps(state.get("evidence") or [], ensure_ascii=False),
+             json.dumps(state.get("per_symbol") or [], ensure_ascii=False),
+             json.dumps(state.get("hits") or [], ensure_ascii=False),
+             json.dumps(state.get("bonus") or {}, ensure_ascii=False)))
+        conn.commit()
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("pre_state 写入失败: %s", exc)
 
 
 def _persist_important_news(conn, important: dict, rows: list[dict], cfg) -> None:

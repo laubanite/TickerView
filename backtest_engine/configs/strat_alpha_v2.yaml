@@ -1,0 +1,148 @@
+# AlphaPrism 策略 · v2(右侧突破回踩 + 左侧 anchor 并存) —— docs/策略规则-执行版.md §B/§F
+# 并存规则(2026-09-03 定死):
+#   ①资金优先级:右侧优先;右侧买入现金不足 → 先清 anchor 腾仓(right_priority)
+#   ②分层独立:右侧破位/减仓档 clear_right_main 不清 anchor(anchor 独立止损/止盈)
+#      (右侧清仓止损档 stop_level 按 §2.2 全清含锚点)
+#   ③anchor 上限:同时最多 1 笔,满配 9% = 总资金 3%
+#   ④再准入:两侧均无冷却,条件满足即可再入
+# 左侧止盈:回撤修复 50%(速验敏感性胜出版);右侧:alpha_right_v1 原样。
+name: alpha_v2_combo
+
+accounts:
+  full_cash: 100000
+  full_allocation: 0.3333        # 满配 = 总资金 1/3(右侧口径)
+
+layers:
+  anchor: 9.0                    # 满配 9% = 总资金 3%
+  trial: 10.0
+  main_cap: 45.0
+  chase_cap: 10.0
+  third_cap: 33.0
+
+indicators:
+  - {id: m_20, type: sma, params: {period: 20}}
+  - {id: adx14, type: adx, params: {period: 14}}
+  - {id: kdj_k, type: stoch_k, params: {}}
+  - {id: kdj_d, type: stoch_d, params: {}}
+
+series:
+  prev20_high:  {type: rolling_max, source: high, lookback: 20}
+  vol20:        {type: rolling_mean, source: volume, lookback: 20}
+  vol5:         {type: rolling_mean, source: volume, lookback: 5}
+  low20_close:  {type: rolling_min, source: close, lookback: 20, min_periods: 5}
+  low250_close: {type: rolling_min, source: close, lookback: 250, min_periods: 60}
+  peak120:      {type: rolling_max, source: close, lookback: 120, min_periods: 30}
+  prev_close:   {type: shift, source: close, n: 1}
+  prev_close2:  {type: shift, source: close, n: 2}
+
+signals:                         # 顺序:右侧止损全清 → 右侧分层 → anchor 退出 → 右侧入场 → anchor 入场
+  # ---- 右侧(最高优先;退出信号均绑定右侧持仓,空仓不吞信号) ----
+  - id: stop_level               # 右侧清仓止损档:全清(含锚点,§2.2 无半级)
+    type: and
+    conds:
+      - {type: layers_any, layers: [trial, main]}
+      - {type: close_below_rolling, ref: low250_close}
+    action: {sell: clear_all}
+
+  - id: break_m20                # 右侧破位:放量 + 收盘 < M20 → 清右侧主仓(留 trial+anchor)
+    type: and
+    conds:
+      - {type: layers_any, layers: [trial, main]}
+      - {type: close_below_ma, ref: m_20}
+      - {type: vol_ratio_above, ref: vol20, threshold: 1.5}
+    action: {sell: clear_right_main}
+
+  - id: cut_level                # 右侧减仓档:收盘 < 近20日最低收盘 → 清右侧主仓(留 trial+anchor)
+    type: and
+    conds:
+      - {type: layers_any, layers: [trial, main]}
+      - {type: close_below_rolling, ref: low20_close}
+    action: {sell: clear_right_main}
+    halt_add: true
+
+  - id: trial_invalid            # ①A 证伪:收盘回落突破位下方 → 清 trial
+    type: and
+    conds:
+      - {type: layers_held, layer: trial}
+      - {type: close_below_series, ref: entry_break_level}
+    action: {sell: clear_trial}
+
+  # ---- anchor 独立退出 ----
+  - id: anchor_timeout           # 持有 ≥20 交易日 → 时间失效
+    type: hold_days_ge
+    days: 20
+    action: {sell: clear_anchor}
+
+  - id: anchor_stop              # 收盘 ≤ 成本×0.92 → 止损
+    type: close_below_cost
+    multiplier: 0.92
+    action: {sell: clear_anchor}
+
+  - id: anchor_take              # 回撤修复 50% → 止盈(均值回归目标,entry 日记录峰值/收盘)
+    type: recovery_pct
+    pct: 50
+    action: {sell: clear_anchor}
+
+  # ---- 右侧入场 ----
+  - id: right_initial            # B1-①:收盘>前20日高点 + ADX>20 + 量≥1.5×20日均量
+    type: and
+    conds:
+      - {type: cross_above_series, ref: prev20_high, source: close}
+      - {type: adx_above, ref: adx14, threshold: 20}
+      - {type: vol_ratio_above, ref: vol20, threshold: 1.5}
+    action: {buy: trial, pct_of_full: 10.0}
+    record_break_level: prev20_high
+
+  - id: time_confirm             # B1-④ 时间确认 ②-B(仅 right_initial 后首日)
+    type: and
+    conds:
+      - {type: days_since, since: right_initial, ge: 1, le: 1}
+      - {type: close_above_series, ref: entry_break_level}
+    action: {buy: main, pct_of_full: 22.0, shared_cap: main_cap}
+
+  - id: pullback_confirm         # B1-③ 结构确认 ②-A:entry≥2日 + 缩量 + 企稳
+    type: and
+    conds:
+      - {type: days_since, since: right_initial, ge: 2}
+      - {type: vol_ratio_below, ref: vol5, threshold: 1.0}
+      - type: or
+        conds:
+          - {type: close_above_ma, ref: m_20}
+          - {type: kdj_golden_cross, j_max: 30}
+    action: {buy: main, pct_of_full: 45.0, shared_cap: main_cap}
+
+  - id: second_pullback          # B1-⑤ 二次回踩 ③
+    type: and
+    conds:
+      - {type: after_signal, ref: pullback_confirm}
+      - {type: days_since, since: pullback_confirm, ge: 2}
+      - {type: vol_ratio_below, ref: vol5, threshold: 1.0}
+      - type: or
+        conds:
+          - {type: close_above_ma, ref: m_20}
+          - {type: kdj_golden_cross, j_max: 30}
+    action: {buy: main, pct_of_full: 33.0, cap_override: remaining}
+
+  - id: chase_back               # B1-⑦ 回补追单:①A持有中再放量站上前20日新高
+    type: and
+    conds:
+      - {type: layers_held, layer: trial}
+      - {type: cross_above_series, ref: prev20_high, source: close}
+      - {type: vol_ratio_above, ref: vol20, threshold: 1.5}
+    action: {buy: main, pct_of_full: 10.0, cap_override: remaining}
+
+  # ---- anchor 入场(halted 门控放行;与右侧并存独立) ----
+  - id: anchor_entry             # J<10 且 回撤≥15% 且 恐慌证据(连2阴=收盘<前收×2 / 放量长阴)
+    type: and
+    conds:
+      - {type: layers_empty, layers: [anchor]}
+      - {type: j_below, threshold: 10}
+      - {type: drawdown_above, ref: peak120, threshold: 15.0}
+      - type: or
+        conds:
+          - type: and
+            conds:
+              - {type: pct_drop, threshold: 3.0}
+              - {type: vol_ratio_above, ref: vol20, threshold: 1.5}
+          - {type: consecutive_down, n: 2}
+    action: {buy: anchor, pct_of_full: 9.0}

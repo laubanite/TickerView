@@ -1,0 +1,165 @@
+# C5' 盘中状态机 → 日线回测翻译(strat_c5_daily) —— 零线上改动,只在校验层运行
+# 翻译依据:alphaprism/planner/intraday_engine.py signal_state / _left_qualify /
+#           suggest_category(白名单映射)。全部条件为原文逐条翻写,标注 [日线翻译] 的处理。
+#
+# 原版逻辑 → 日线语义:
+#   右侧初现 = 放量(vr≥1.5) + 收盘 ≥ 近20日上沿([日线翻译] 上沿=前20日高点,不含当日;
+#              盘中用实时价 vs 含当日区间,收盘定格后等价于收盘站上前高)
+#             —— 原文无 ADX 门槛(四重门槛属 §3.1 另述,状态机不含)
+#   破位    = 放量 + 收盘 < M20
+#   超跌试多 = (J<10 或 距阶段高点回撤≥15%) 且 恐慌(跌幅≥max(1.5×ATR20%,1.5%) 且放量)
+#              且 位置到位(≥近250日低 且 距其 ≤max(1.5%,1.5×ATR20%))
+#             [日线翻译] 大盘闸(上证放量破M20禁试多)未纳入日线版,记 [草案]
+#   类别映射 = 破位退出→减仓 / 右侧初现→加仓 / 超跌试多→试多 / 其余→观望/等待确认(不动)
+#   右侧确认(跨日)= 次日收盘不破突破位 → 加仓(盘后增量1 语义,time_confirm 承担)
+#   回踩企稳(C8'/§3.2④ 三选一 v1 口径) = 站回M20 或 KDJ低位金叉 → pullback_confirm
+#   [草案] 锚点退出(§4.4 三态,日线近似):M20 站回归还(与 leftanchor_v1 同口径;
+#           敏感性轮已证"回撤修复50%"优于 M20——本文件为忠实翻译,对照变体另跑)
+name: c5_daily
+
+accounts:
+  full_cash: 100000
+  full_allocation: 0.3333
+
+layers:
+  anchor: 9.0
+  trial: 10.0
+  main_cap: 45.0
+  chase_cap: 10.0
+  third_cap: 33.0
+
+indicators:
+  - {id: m_5,  type: sma, params: {period: 5}}
+  - {id: m_10, type: sma, params: {period: 10}}
+  - {id: m_20, type: sma, params: {period: 20}}
+  - {id: kdj_k, type: stoch_k, params: {}}
+  - {id: kdj_d, type: stoch_d, params: {}}
+
+series:
+  prev20_high:  {type: rolling_max, source: high, lookback: 20}
+  vol20:        {type: rolling_mean, source: volume, lookback: 20}
+  vol5:         {type: rolling_mean, source: volume, lookback: 5}
+  low20_close:  {type: rolling_min, source: close, lookback: 20, min_periods: 5}
+  low250_close: {type: rolling_min, source: close, lookback: 250, min_periods: 60}
+  low250:       {type: rolling_min, source: low, lookback: 250, min_periods: 60}
+  peak120:      {type: rolling_max, source: close, lookback: 120, min_periods: 30}
+  prev_close:   {type: shift, source: close, n: 1}
+  prev_close2:  {type: shift, source: close, n: 2}
+
+signals:                         # 顺序:止损全清 → 破位/减仓 → ①A证伪 → 锚点退出 → 入场
+  - id: stop_level               # 清仓止损档(近250日最低收盘)→ 全清
+    type: and
+    conds:
+      - {type: layers_any, layers: [trial, main]}
+      - {type: close_below_rolling, ref: low250_close}
+    action: {sell: clear_all}
+
+  - id: break_m20                # C5' 破位退出:放量 + 收盘 < M20 → 类别=减仓
+    type: and
+    conds:
+      - {type: layers_any, layers: [trial, main]}
+      - {type: close_below_ma, ref: m_20}
+      - {type: vol_ratio_above, ref: vol20, threshold: 1.5}
+    action: {sell: clear_right_main}
+
+  - id: cut_level                # 减仓档(近20日最低收盘)→ 清右侧主仓;停止加仓
+    type: and
+    conds:
+      - {type: layers_any, layers: [trial, main]}
+      - {type: close_below_rolling, ref: low20_close}
+    action: {sell: clear_right_main}
+    halt_add: true
+
+  - id: trial_invalid            # ①A 证伪:收盘回落突破位(前20日高点)下方 → 清 trial
+    type: and
+    conds:
+      - {type: layers_held, layer: trial}
+      - {type: close_below_series, ref: entry_break_level}
+    action: {sell: clear_trial}
+
+  # ---- 锚点退出([草案] §4.4 三态日线近似;均绑定锚点持仓,空仓不吞信号) ----
+  - id: anchor_timeout
+    type: and
+    conds:
+      - {type: layers_held, layer: anchor}
+      - {type: hold_days_ge, days: 20}
+    action: {sell: clear_anchor}
+
+  - id: anchor_stop
+    type: and
+    conds:
+      - {type: layers_held, layer: anchor}
+      - {type: close_below_cost, multiplier: 0.92}
+    action: {sell: clear_anchor}
+
+  - id: anchor_take              # 锚定回升:收盘站回 M20(草案,对照变体=修复50%)
+    type: and
+    conds:
+      - {type: layers_held, layer: anchor}
+      - {type: close_above_ma, ref: m_20}
+    action: {sell: clear_anchor}
+
+  # ---- 入场 ----
+  - id: right_initial            # C5' 右侧初现:放量 + 收盘≥近20日上沿(无ADX门槛,原文保真)
+    type: and
+    conds:
+      - {type: cross_above_series, ref: prev20_high, source: close}
+      - {type: vol_ratio_above, ref: vol20, threshold: 1.5}
+    action: {buy: trial, pct_of_full: 10.0}
+    record_break_level: prev20_high
+
+  - id: time_confirm             # 右侧确认(盘后增量1):次日收盘不破突破位 → 加仓②-B
+    type: and
+    conds:
+      - {type: days_since, since: right_initial, ge: 1, le: 1}
+      - {type: close_above_series, ref: entry_break_level}
+    action: {buy: main, pct_of_full: 22.0, shared_cap: main_cap}
+
+  - id: pullback_confirm         # 回踩企稳(§3.2④ v1 口径):entry≥2日 + 缩量 + (站回M20 或 KDJ金叉)
+    type: and
+    conds:
+      - {type: days_since, since: right_initial, ge: 2}
+      - {type: vol_ratio_below, ref: vol5, threshold: 1.0}
+      - type: or
+        conds:
+          - {type: close_above_ma, ref: m_20}
+          - {type: kdj_golden_cross, j_max: 30}
+    action: {buy: main, pct_of_full: 45.0, shared_cap: main_cap}
+
+  - id: second_pullback
+    type: and
+    conds:
+      - {type: after_signal, ref: pullback_confirm}
+      - {type: days_since, since: pullback_confirm, ge: 2}
+      - {type: days_since, since: second_pullback, ge: 5}
+      - {type: vol_ratio_below, ref: vol5, threshold: 1.0}
+      - type: or
+        conds:
+          - {type: close_above_ma, ref: m_20}
+          - {type: kdj_golden_cross, j_max: 30}
+    action: {buy: main, pct_of_full: 33.0, cap_override: remaining}
+
+  - id: chase_back
+    type: and
+    conds:
+      - {type: layers_held, layer: trial}
+      - {type: cross_above_series, ref: prev20_high, source: close}
+      - {type: vol_ratio_above, ref: vol20, threshold: 1.5}
+    action: {buy: main, pct_of_full: 10.0, cap_override: remaining}
+
+  - id: anchor_entry             # C5' 超跌试多:(J<10 或 回撤≥15%) 且 恐慌且放量 且 位置到位
+    type: and
+    conds:
+      - {type: layers_empty, layers: [anchor]}
+      - type: or
+        conds:
+          - {type: j_below, threshold: 10}
+          - {type: drawdown_above, ref: peak120, threshold: 15.0}
+      - {type: panic_drop, threshold: 0.0}
+      - {type: vol_ratio_above, ref: vol20, threshold: 1.5}
+      - {type: pos_ok, threshold: 0.0}
+    action: {buy: anchor, pct_of_full: 9.0}
+
+# 新引擎件(C5' 翻译):series m_5/m_10/low250/atr20_pct;条件 ma_spread_below/
+#   panic_drop/pos_ok(均线粘合未直接驱动动作——区间震荡/变盘前兆→观望不动,
+#   无需条件化,保真于"只看动作"的回测口径)。

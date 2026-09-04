@@ -102,8 +102,8 @@ td .nm{color:#fff}
 /* ===== 消息/剧本/纪律 ===== */
 .nw{padding:9px 12px;border-radius:var(--r-sm);margin-bottom:8px;font-size:12px;line-height:1.55}
 /* A股配色:利好=红,利空=绿,中性=白 - 暗调靠参考图 */
-.nw.up{background:#1c1012;border:1px solid #3d1a22;color:#ff9aa5}
-.nw.down{background:#0e1a14;border:1px solid #1a3328;color:#7fd6c0}
+.nw.up{background:#0e1a14;border:1px solid #1a3328;color:#7fd6c0}   /* 消息方向:利好=绿(机会) */
+.nw.down{background:#1c1012;border:1px solid #3d1a22;color:#ff9aa5}  /* 消息方向:利空=红(风险) */
 .nw.mid{background:#141819;border:1px solid #232a2d;color:#d4d7da}
 table.mk td{white-space:normal;vertical-align:top}
 ul.disc{padding-left:18px;font-size:12px;line-height:1.7}
@@ -493,3 +493,17 @@ select.ctl{cursor:pointer}
 .l1-main{font-size:13px;line-height:1.65;color:var(--text);margin-top:4px}
 .l1-line{color:var(--text)}
 .l1-acts{color:#b9c2c9;font-size:12.5px}
+
+/* ===== 盘前市场状态卡(T1,2026-09,docs/盘前方案.md v3.3)===== */
+.st-row{display:flex;align-items:center;gap:10px;font-size:13px;margin-top:4px;flex-wrap:wrap}
+.st-hint{color:var(--dim);font-size:12px}
+.st-dot{width:10px;height:10px;border-radius:50%;display:inline-block;flex:none}
+.st-dot.sm{width:8px;height:8px}
+.st-green{background:#089981}.st-yellow{background:#e5c07b}.st-red{background:#f23645}
+.st-ev{margin-top:6px;display:flex;flex-direction:column;gap:2px}
+.st-ev-line{font-size:11px;color:var(--dim)}
+.st-syms{display:flex;flex-wrap:wrap;gap:4px 12px;margin-top:8px;font-size:12px}
+.st-sym{display:inline-flex;align-items:center;gap:4px;color:var(--text)}
+.pm-bad{background:#1c1012;border:1px solid #3d1a22;color:#ff9aa5}    /* 利空·高危=红(警示) */
+.pm-warn{background:#1a1610;border:1px solid #5b4a1f;color:#e5c07b}   /* 利空·中度=琥珀 */
+.pm-good{background:#0e1a14;border:1px solid #1a3328;color:#7fd6c0}   /* 利好=绿(机会) */

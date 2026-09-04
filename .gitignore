@@ -20,3 +20,13 @@ __pycache__/
 # ç³»ç»Ÿ
 .DS_Store
 Thumbs.db
+
+# »Ø²âÒıÇæ±¾µØ»·¾³(conda prefix,¹¤×÷ÇøÄÚ×Ô°üº¬)
+.bt-env/
+
+.bt-vendor/
+.bt-tmp/
+.bt-pkgs/
+
+# ç¼–è¾‘å™¨/å·¥å…·çŠ¶æ€
+.opencode/

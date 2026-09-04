@@ -137,6 +137,17 @@ _TYPES = {"宏观政策", "行业涨价", "龙头业绩", "海外市场", "突�
 _GRADES = {"官方", "媒体", "快讯", "传闻"}
 
 
+def _snap_sentence(s: str, n: int) -> str:
+    """句子边界截断(反截断规则,docs/盘前方案.md §七):截断只允许落在句读
+    (。！？；.!?;)之后补省略号,不产生"话说一半"的半句残片。"""
+    s = (s or "").strip()
+    if len(s) <= n:
+        return s
+    cut = s[:n]
+    idx = max(cut.rfind(c) for c in "。！？；.!?;")
+    return (cut[: idx + 1] if idx >= 0 else cut).rstrip("；;") + "…"
+
+
 def _llm_important_news(feed: list[dict], sector_hits: dict[str, list[dict]],
                         sector_names: list[str], cfg, prior: str = "",
                         sector_perf: dict | None = None) -> dict:
@@ -207,14 +218,14 @@ def _llm_important_news(feed: list[dict], sector_hits: dict[str, list[dict]],
             seen_texts.add(prefix)
             out.append({
                 "time": (it.get("time") or "")[:5],
-                "text": (it.get("text") or "").strip()[:80],
+                "text": (it.get("text") or "").strip(),        # 反截断:正文全量入库,不做 [:80]
                 "impact": impact,
                 "type": ctype,
                 "sector": it.get("sector") or "其他",
                 "source": (it.get("source") or "新浪")[:4],
                 "source_grade": grade,
                 "confidence": conf,
-                "reason": (it.get("reason") or "").strip()[:50],
+                "reason": _snap_sentence(it.get("reason"), 60),  # 反截断:句子边界
             })
         # 幻觉过滤:输出文本须与任一 feed 原文有 ≥5 字公共子串,否则视为编造丢弃
         # (5 字阈值:保住压缩文本如"Q1净利润",同时排除"布202"这类日期巧合)
@@ -234,7 +245,8 @@ def _llm_important_news(feed: list[dict], sector_hits: dict[str, list[dict]],
             it["cross"] = max([fc for ft, fc in feed_cross if ft[:15] and (t[:15] in ft or ft[:15] in t)],
                               default=1)
         out.sort(key=lambda x: _IMPACT_ORDER.get(x["impact"], 9))
-        return {"summary": (data.get("summary") or "").strip(), "items": out}
+        return {"summary": _snap_sentence(data.get("summary"), 220),   # 反截断:句子边界兜底
+                "items": out}
     except Exception as exc:  # noqa: BLE001
         logger.warning("重要新闻 LLM 解析失败: %s", exc)
         return {}
@@ -247,7 +259,7 @@ def _rule_important_news(sector_hits: dict[str, list[dict]], sector_names: list[
         for it in (sector_hits.get(sector) or [])[:2]:
             items.append({
                 "time": it.get("time", "")[5:16][:5] if it.get("time") else "",
-                "text": (it.get("text") or "")[:80],
+                "text": (it.get("text") or "").strip(),   # 反截断:原文全量
                 "impact": "中性",
                 "type": "其他",
                 "sector": sector,

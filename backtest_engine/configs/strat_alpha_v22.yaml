@@ -1,0 +1,161 @@
+# AlphaPrism 策略 · v2.2(截面评分 + Top-3 + 换手带) —— 在 alpha_v2 信号之上加选择层
+# 信号(=v2,入场闸门):右侧 alpha_right_v1 原样 + 左侧 anchor(修复50%)原样。
+# 选择层:每日候选(有入场信号或持仓中)按 side 评分 → Top-3 槽位;
+#         全部满槽时,仅当挑战者 评分≥持者×1.25 且 排名领先≥2位 才轮动换仓。
+# 轮动口径:换仓=清该标的所有层(组合层语义,anchor 独立规则在轮动时退让,记 [v2.2 口径])。
+# 验收:核心 组合池最大回撤 <15%;年换手 <3x;费用 <1%/年(收益为次级指标)。
+name: alpha_v22_scored
+
+accounts:
+  full_cash: 100000
+  full_allocation: 0.3333
+
+layers:
+  anchor: 9.0
+  trial: 10.0
+  main_cap: 45.0
+  chase_cap: 10.0
+  third_cap: 33.0
+
+scoring:
+  right:                       # 右侧候选(突破强度)
+    - {factor: breakout_pct, weight: 2.0}
+    - {factor: adx, weight: 1.0}
+    - {factor: vol_ratio, weight: 1.0}
+    - {factor: rs20, weight: 1.5}
+  left:                        # 左侧候选(超跌反弹动能)
+    - {factor: drawdown, weight: 2.0}
+    - {factor: panic, weight: 1.0}
+    - {factor: rebound_energy, weight: 1.5}
+
+selection:
+  top_k: 3
+  band:
+    score_gap_pct: 25.0        # 挑战者评分 ≥ 持者 × 1.25
+    rank_gap: 2                # 且排名领先 ≥ 2 位
+  max_turnover_per_year: 3.0   # 验收线(报告级)
+
+signals:                       # 与 alpha_v2 全同(顺序:止损全清 → 分层 → anchor退出 → 右侧入场 → anchor入场)
+  - id: stop_level
+    type: and
+    conds:
+      - {type: layers_any, layers: [trial, main]}
+      - {type: close_below_rolling, ref: low250_close}
+    action: {sell: clear_all}
+
+  - id: break_m20
+    type: and
+    conds:
+      - {type: layers_any, layers: [trial, main]}
+      - {type: close_below_ma, ref: m_20}
+      - {type: vol_ratio_above, ref: vol20, threshold: 1.5}
+    action: {sell: clear_right_main}
+
+  - id: cut_level
+    type: and
+    conds:
+      - {type: layers_any, layers: [trial, main]}
+      - {type: close_below_rolling, ref: low20_close}
+    action: {sell: clear_right_main}
+    halt_add: true
+
+  - id: trial_invalid
+    type: and
+    conds:
+      - {type: layers_held, layer: trial}
+      - {type: close_below_series, ref: entry_break_level}
+    action: {sell: clear_trial}
+
+  - id: anchor_timeout
+    type: hold_days_ge
+    days: 20
+    action: {sell: clear_anchor}
+
+  - id: anchor_stop
+    type: close_below_cost
+    multiplier: 0.92
+    action: {sell: clear_anchor}
+
+  - id: anchor_take
+    type: recovery_pct
+    pct: 50
+    action: {sell: clear_anchor}
+
+  - id: right_initial
+    type: and
+    conds:
+      - {type: cross_above_series, ref: prev20_high, source: close}
+      - {type: adx_above, ref: adx14, threshold: 20}
+      - {type: vol_ratio_above, ref: vol20, threshold: 1.5}
+    action: {buy: trial, pct_of_full: 10.0}
+    record_break_level: prev20_high
+
+  - id: time_confirm
+    type: and
+    conds:
+      - {type: days_since, since: right_initial, ge: 1, le: 1}
+      - {type: close_above_series, ref: entry_break_level}
+    action: {buy: main, pct_of_full: 22.0, shared_cap: main_cap}
+
+  - id: pullback_confirm
+    type: and
+    conds:
+      - {type: days_since, since: right_initial, ge: 2}
+      - {type: vol_ratio_below, ref: vol5, threshold: 1.0}
+      - type: or
+        conds:
+          - {type: close_above_ma, ref: m_20}
+          - {type: kdj_golden_cross, j_max: 30}
+    action: {buy: main, pct_of_full: 45.0, shared_cap: main_cap}
+
+  - id: second_pullback
+    type: and
+    conds:
+      - {type: after_signal, ref: pullback_confirm}
+      - {type: days_since, since: pullback_confirm, ge: 2}
+      - {type: vol_ratio_below, ref: vol5, threshold: 1.0}
+      - type: or
+        conds:
+          - {type: close_above_ma, ref: m_20}
+          - {type: kdj_golden_cross, j_max: 30}
+    action: {buy: main, pct_of_full: 33.0, cap_override: remaining}
+
+  - id: chase_back
+    type: and
+    conds:
+      - {type: layers_held, layer: trial}
+      - {type: cross_above_series, ref: prev20_high, source: close}
+      - {type: vol_ratio_above, ref: vol20, threshold: 1.5}
+    action: {buy: main, pct_of_full: 10.0, cap_override: remaining}
+
+  - id: anchor_entry
+    type: and
+    conds:
+      - {type: layers_empty, layers: [anchor]}
+      - {type: j_below, threshold: 10}
+      - {type: drawdown_above, ref: peak120, threshold: 15.0}
+      - type: or
+        conds:
+          - type: and
+            conds:
+              - {type: pct_drop, threshold: 3.0}
+              - {type: vol_ratio_above, ref: vol20, threshold: 1.5}
+          - {type: consecutive_down, n: 2}
+    action: {buy: anchor, pct_of_full: 9.0}
+
+series:
+  prev20_high:  {type: rolling_max, source: high, lookback: 20}
+  vol20:        {type: rolling_mean, source: volume, lookback: 20}
+  vol5:         {type: rolling_mean, source: volume, lookback: 5}
+  low20_close:  {type: rolling_min, source: close, lookback: 20, min_periods: 5}
+  low250_close: {type: rolling_min, source: close, lookback: 250, min_periods: 60}
+  peak120:      {type: rolling_max, source: close, lookback: 120, min_periods: 30}
+  prev_close:   {type: shift, source: close, n: 1}
+  prev_close2:  {type: shift, source: close, n: 2}
+  rs20:         {type: rel_shift, source: close, n: 20}   # 20日相对涨幅(全池排名内化)
+
+indicators:
+  - {id: m_20, type: sma, params: {period: 20}}
+  - {id: adx14, type: adx, params: {period: 14}}
+  - {id: kdj_k, type: stoch_k, params: {}}
+  - {id: kdj_d, type: stoch_d, params: {}}

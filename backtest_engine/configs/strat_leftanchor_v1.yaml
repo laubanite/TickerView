@@ -1,0 +1,59 @@
+# AlphaPrism 左侧 anchor 快速信号验证(v1.5 速验) —— docs/策略规则-执行版.md §F
+# 定位:快速验证"左侧有没有 alpha",非 v2 定稿。
+# 口径:满配=总资金 1.0(单标的全现金);anchor 单次 ≤ 3% 总资金;M20 止盈(被动收窄声明见 §F);
+# 连2阴 = 连续 2 交易日收盘 < 前收(非收盘<开盘,防十字星/假阳);
+# 大盘闸关闭(§F.1);standalone 全时段(上限口径)。
+name: leftanchor_v1
+
+accounts:
+  full_cash: 100000
+  full_allocation: 1.0        # anchor 速验:满配基准=总资金
+
+layers:
+  anchor: 3.0                 # 单次 ≤ 总资金 3%
+
+indicators:
+  - {id: m_20,  type: sma, params: {period: 20}}
+  - {id: kdj_k, type: stoch_k, params: {}}
+  - {id: kdj_d, type: stoch_d, params: {}}
+
+series:
+  vol20:            {type: rolling_mean, source: volume, lookback: 20}
+  peak120:          {type: rolling_max, source: close, lookback: 120, min_periods: 30}
+  prev_close:       {type: shift, source: close, n: 1}
+  prev_close2:      {type: shift, source: close, n: 2}
+
+signals:                     # 顺序:退出 → 入场;单动作/bar
+  - id: anchor_timeout       # 持有 ≥20 交易日 → 时间失效
+    type: hold_days_ge
+    days: 20
+    action: {sell: clear_anchor}
+
+  - id: anchor_stop          # 收盘 ≤ 成本×0.92 → 止损
+    type: close_below_cost
+    multiplier: 0.92
+    action: {sell: clear_anchor}
+
+  - id: anchor_take          # 收盘站回 M20 → 止盈(深跌后 M20 被动下移,盈亏比=区间估计)
+    type: close_above_ma
+    ref: m_20
+    action: {sell: clear_anchor}
+
+  - id: anchor_entry         # J<10 且 回撤≥15%(自近120日高点) 且 恐慌证据
+    type: and
+    conds:
+      - {type: layers_empty, layers: [anchor]}
+      - {type: j_below, threshold: 10}
+      - {type: drawdown_above, ref: peak120, threshold: 15.0}
+      - type: or
+        conds:
+          - type: and
+            conds:
+              - {type: pct_drop, threshold: 3.0}
+              - {type: vol_ratio_above, ref: vol20, threshold: 1.5}
+          - {type: consecutive_down, n: 2}
+    action: {buy: anchor, pct_of_full: 3.0}
+
+# 新增引擎件(§F.3):series peak120/prev_close/prev_close2;
+#   条件 j_below/pct_drop/consecutive_down/drawdown_above/close_below_cost/
+#   hold_days_ge/layers_empty;动作 clear_anchor。

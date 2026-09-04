@@ -1,0 +1,12 @@
+# 引擎全局配置(对标聚宽默认口径;run_backtest 未显式传参时全部读取本文件)
+initial_cash: 100000        # 初始资金
+commission_rate: 0.0005     # 佣金率(ETF 万5,双向)
+slippage_rate: 0.0002       # 单边固定滑点 0.02%(保守档;0 过于乐观)
+                            #   买入成交价 = 信号价×(1+滑点),卖出 = 信号价×(1-滑点)
+                            #   Layer3 聚宽对标专用:engine_cfg={'slippage_rate':0} + 聚宽 FixedSlippage(0)
+matching: next_open         # 撮合时点:next_open = 信号 bar 收盘判定、下一根开盘成交
+                            #   (与聚宽日频默认一致,2026-09 实证对齐)
+                            # close = 信号当日收盘成交(早期口径,敏感性对比用)
+settlement_mode: T1         # T1:当日买入不可当日卖出(A股股票/普通 ETF)
+                            # T0:当日可回转(跨境/债券/商品/货币 ETF,如 513180/511010/518880)
+lot_size: 100               # 场内最小交易单位(股)

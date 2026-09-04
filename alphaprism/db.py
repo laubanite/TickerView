@@ -226,6 +226,19 @@ CREATE TABLE IF NOT EXISTS advice_verification (
     PRIMARY KEY (archive_id, n_day)
 );
 
+-- 盘前市场状态标签 T1(2026-09,docs/盘前方案.md v3.3):纯消息定级,每日一份
+CREATE TABLE IF NOT EXISTS pre_state (
+    trade_date  TEXT PRIMARY KEY,     -- 当日
+    level       TEXT NOT NULL,        -- green|yellow|red
+    name        TEXT,
+    hint        TEXT,
+    evidence    TEXT,                 -- JSON[str] 依据行
+    per_symbol  TEXT,                 -- JSON[{symbol,name,level,hits}]
+    hits        TEXT,                 -- JSON 利空命中明细
+    bonus       TEXT,                 -- JSON {"利好":n,"中性":n}
+    updated_at  TEXT
+);
+
 CREATE TABLE IF NOT EXISTS holdings (
     symbol     TEXT PRIMARY KEY,      -- ETF 代码
     name       TEXT,

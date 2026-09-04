@@ -1,0 +1,106 @@
+# AlphaPrism 策略 · v1(右侧突破回踩 + 分层持仓 + 三档退出)  —— 对应 docs/策略规则-执行版.md
+# 范围:v1 只含右侧路径;左侧试多/保本线/警示减仓 = v2/v1.1。条件均为确定性,无 eval。
+# 撮合:next_open(信号 bar 收盘判定 → 次 bar 开盘成交,与 Layer3 对齐口径)
+name: alpha_right_v1
+
+accounts:
+  full_cash: 100000          # 初始资金
+  full_allocation: 0.3333    # 满配 = 总资金 1/3
+
+layers:                      # 满配百分比上限(相对满配金额)
+  trial: 10.0                # ①A 试探仓(≤10%,T+1 补偿)
+  main_cap: 45.0             # ②-A + ②-B 合计 ≤45%
+  chase_cap: 10.0            # 追单 ≤min(10%,剩余)
+  third_cap: 33.0            # ③ ≤min(33%,剩余)[v1 草案]
+
+indicators:                  # 引擎预计算(全量历史,窗口边界见引擎铁律)
+  - {id: m_20, type: sma, params: {period: 20}}
+  - {id: adx14, type: adx, params: {period: 14}}
+  - {id: kdj_k, type: stoch_k, params: {}}
+  - {id: kdj_d, type: stoch_d, params: {}}
+
+series:                      # 滚动窗口数据操作(不含当日)
+  prev20_high:  {type: rolling_max, source: high, lookback: 20}
+  vol20:        {type: rolling_mean, source: volume, lookback: 20}
+  vol5:         {type: rolling_mean, source: volume, lookback: 5}
+  low20_close:  {type: rolling_min, source: close, lookback: 20, min_periods: 5}
+  low250_close: {type: rolling_min, source: close, lookback: 250, min_periods: 60}
+
+signals:                     # 判定顺序 = 本文件排列顺序;每 bar 首触发即停(单动作)
+  # ---- 退出(最高优先,三档) ----
+  - id: stop_level            # B2-②b 清仓止损档(无半级)
+    type: close_below_rolling
+    ref: low250_close
+    action: {sell: clear_all}
+
+  - id: break_m20             # B2-① 破位:放量 + 日线收盘 < M20
+    type: and
+    conds:
+      - {type: close_below_ma, ref: m_20}
+      - {type: vol_ratio_above, ref: vol20, threshold: 1.5}
+    action: {sell: clear_right_main, fallback_no_trial: clear_all}
+
+  - id: cut_level             # B2-②a 减仓档:收盘 < 近20日最低收盘
+    type: close_below_rolling
+    ref: low20_close
+    action: {sell: clear_right_main}
+    halt_add: true            # B1-⑧ 触发后挂起加仓(价格失效停止加仓)
+
+  - id: trial_invalid         # B1-② 收盘回落突破位下方 → trial 全清
+    type: close_below_series
+    ref: entry_break_level
+    action: {sell: clear_trial}
+
+  # ---- 右侧入场 / 加仓 ----
+  - id: right_initial         # B1-① 右侧初现:收盘>前20日高点 + ADX>20 + 量≥1.5×20日均量
+    type: and
+    conds:
+      - {type: cross_above_series, ref: prev20_high, source: close}
+      - {type: adx_above, ref: adx14, threshold: 20}
+      - {type: vol_ratio_above, ref: vol20, threshold: 1.5}
+    action: {buy: trial, pct_of_full: 10.0}
+    record_break_level: prev20_high
+
+  - id: time_confirm          # B1-④ 时间确认 ②-B:次日收盘 ≥ 突破位(仅 right_initial 后首日)
+    type: and
+    conds:
+      - {type: days_since, since: right_initial, ge: 1, le: 1}
+      - {type: close_above_series, ref: entry_break_level}
+    action: {buy: main, pct_of_full: 22.0, shared_cap: main_cap}
+
+  - id: pullback_confirm      # B1-③ 结构确认 ②-A:entry≥2日 + 缩量 + 企稳(站回M20 或 KDJ金叉)
+    type: and
+    conds:
+      - {type: days_since, since: right_initial, ge: 2}
+      - {type: vol_ratio_below, ref: vol5, threshold: 1.0}
+      - type: or
+        conds:
+          - {type: close_above_ma, ref: m_20}
+          - {type: kdj_golden_cross, j_max: 30}
+    action: {buy: main, pct_of_full: 45.0, shared_cap: main_cap}
+
+  - id: second_pullback       # B1-⑤ 二次回踩 ③:②已建后重复企稳条件
+    type: and
+    conds:
+      - {type: after_signal, ref: pullback_confirm}
+      - {type: days_since, since: pullback_confirm, ge: 2}
+      - {type: vol_ratio_below, ref: vol5, threshold: 1.0}
+      - type: or
+        conds:
+          - {type: close_above_ma, ref: m_20}
+          - {type: kdj_golden_cross, j_max: 30}
+    action: {buy: main, pct_of_full: 33.0, cap_override: remaining}
+
+  - id: chase_back            # B1-⑦ 回补追单:①A持有中再放量收盘站上前20日新高
+    type: and
+    conds:
+      - {type: layers_held, layer: trial}
+      - {type: cross_above_series, ref: prev20_high, source: close}
+      - {type: vol_ratio_above, ref: vol20, threshold: 1.5}
+    action: {buy: main, pct_of_full: 10.0, cap_override: remaining}
+
+# 注册表扩展(实现清单,确定性,无 eval):
+#   cross_above_series/close_above_series/close_below_series/adx_above/
+#   vol_ratio_above/vol_ratio_below/close_above_ma/close_below_ma/
+#   close_below_rolling/kdj_golden_cross/days_since(ge+le)/after_signal/
+#   layers_held/and/or;上下文:entry_break_level(入场记录的前20日高点)

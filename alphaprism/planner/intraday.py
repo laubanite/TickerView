@@ -1372,7 +1372,10 @@ def build_deterministic_advice(code: str, cfg: Config | None = None,
     holding = holding_context(cfg)
     anchors = param_anchors(facts, holding)
     catalyst = catalyst_context(facts, state, cfg)
-    category = suggest_category("## 建议类别: 观望", state)
+    # 注意:suggest_category 的 md 参数必须"无类别行"(传空串),否则占位行
+    # "建议类别: 观望" 会先命中正则 → 类别恒为观望,状态→类别映射永不生效
+    # (2026-09 回放器发现:此 bug 导致方向性建议类别全变观望、盘后验证无法判定)。
+    category = suggest_category("", state)
     card = fallback_conclusion(state, anchors)
     advice_md = (f"## 建议类别: {category}\n\n"
                  f"- 状态词: {state.get('state_word') or '-'}"
@@ -1608,7 +1611,8 @@ def build_tech_analysis(code: str, cfg: Config | None = None,
     card, _card_src = generate_conclusion_card(snapshot_md, anchors, state, cfg,
                                                prior_evidence=prior_evidence)
     card_md = render_conclusion_card(card)
-    category = suggest_category("## 建议类别: 观望", state)   # 程序默认,LLM 不产类别
+    # 注意:md 必须无"建议类别"行(传空串走状态→类别映射),见 build_deterministic_advice 注释
+    category = suggest_category("", state)   # 程序默认,LLM 不产类别
 
     # ---- 关键:深入分析输入 = 快照过滤内外盘/资金信号(避免"一边说参考性弱一边分析")----
     snapshot_filtered = filter_analysis_input(snapshot_md)
