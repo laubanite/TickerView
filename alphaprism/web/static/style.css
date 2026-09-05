@@ -141,6 +141,8 @@ table.mk textarea:focus{outline:none;border-color:var(--accent);box-shadow:var(-
 /* 统一操作行 */
 .btn-row{display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin:10px 0}
 .btn-row .btn{margin-top:0}
+/* 刷新快照内嵌时间戳:收敛为弱化元信息,去掉突兀的长串存在感 */
+.btn-row .btn .dim{color:#5c656c;font-size:10px!important;font-weight:400;letter-spacing:.3px;font-variant-numeric:tabular-nums}
 .scrolly{flex:1;min-height:0;overflow:auto;display:flex;flex-direction:column}
 
 /* 盘前 tab 内容流优化 - 保留行为规则,只换视觉 */
@@ -467,13 +469,16 @@ select.ctl{cursor:pointer}
 .vc-date{flex:none;font-size:12px;color:var(--text);width:76px;line-height:1.3}
 .vc-date .dim{display:block;font-size:10px}
 .vc-cols{display:flex;gap:6px;flex-wrap:wrap}
-.vc-cell{flex:none;width:76px;border-radius:8px;padding:4px 6px;text-align:center;font-size:11px;
-  line-height:1.4;color:#06251f}
+.vc-cell{flex:none;width:76px;min-height:56px;border-radius:8px;padding:5px 6px;text-align:center;font-size:11px;
+  line-height:1.4;color:var(--text);display:flex;flex-direction:column;justify-content:space-between}
 .vc-cell .vc-sym{display:block;font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.vc-cell .vc-code{display:block;font-size:8px;opacity:.45;letter-spacing:.2px;line-height:1.15;margin-top:-1px}
 .vc-cell .vc-out{display:block;font-size:10px;opacity:.9}
-.vc-ok{background:var(--green);color:#06251f}
-.vc-bad{background:var(--red);color:#2a0508}
-.vc-pend{background:rgba(76,141,255,.10);border:1px solid #4c8dff;color:#c9d6ea}
+.vc-code-in{font-size:9px;opacity:.55;font-weight:400;margin-left:4px}
+/* 2026-09-05 用户拍板:全部改非实心框(与蓝框同构),色值自定 */
+.vc-ok{background:rgba(60,82,39,.12);border:1px solid #3C5227;color:#a9c48f}
+.vc-bad{background:rgba(170,51,60,.12);border:1px solid #AA333C;color:#e0a3a7}
+.vc-pend{background:rgba(0,49,83,.35);border:1px solid #003153;color:#c9d6ea}
 .vc-watch{background:var(--panel2);border:1px dashed rgba(255,255,255,.18);color:var(--dim)}
 .vc-detail{border:1px solid var(--line);border-radius:10px;margin-top:8px;padding:10px 12px;background:var(--panel2)}
 .vc-dhead{font-size:12px;color:var(--text);margin-bottom:6px}
@@ -483,16 +488,16 @@ select.ctl{cursor:pointer}
 .vc-item-head b{margin:0 6px;color:var(--text)}
 .vc-item-rs{display:flex;gap:10px;font-size:12px;margin:5px 0}
 .vc-r{padding:2px 8px;border-radius:6px;color:#e8eaec}
-.vc-r.vc-ok{background:#0f2e26;color:var(--green)}
-.vc-r.vc-bad{background:#3a1520;color:var(--red)}
-.vc-r.vc-pend{background:rgba(76,141,255,.10);color:#8fb3e8}
+.vc-r.vc-ok{background:rgba(60,82,39,.18);color:#a9c48f}
+.vc-r.vc-bad{background:rgba(170,51,60,.16);color:#e0a3a7}
+.vc-r.vc-pend{background:rgba(0,49,83,.35);color:#8fb3e8}
 .vc-item-md{font-size:11px;margin-top:4px;white-space:pre-wrap}
 
-/* ===== 盘中一句话信号(L1,2026-09:规则引擎确定性,零 LLM,两行展示)===== */
-.l1-card{border-top:2px solid #4c8dff}
-.l1-main{font-size:13px;line-height:1.65;color:var(--text);margin-top:4px}
-.l1-line{color:var(--text)}
-.l1-acts{color:#b9c2c9;font-size:12.5px}
+/* ===== 盘中一句话信号(L1,规则引擎确定性,零 LLM,两行展示;中性克制,不引入绿语义)===== */
+.l1-card{border:1px solid var(--line)}
+.l1-main{font-size:13px;line-height:1.7;color:var(--text);margin-top:6px}
+.l1-line{color:var(--text);font-weight:600}
+.l1-acts{color:var(--dim);font-size:12.5px;margin-top:6px}
 
 /* ===== 盘前市场状态卡(T1,2026-09,docs/盘前方案.md v3.3)===== */
 .st-row{display:flex;align-items:center;gap:10px;font-size:13px;margin-top:4px;flex-wrap:wrap}

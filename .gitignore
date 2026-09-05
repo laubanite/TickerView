@@ -21,7 +21,7 @@ __pycache__/
 .DS_Store
 Thumbs.db
 
-# �ز����汾�ػ���(conda prefix,���������԰���)
+# �ز����汾�ػ���(conda prefix,���������԰���)
 .bt-env/
 
 .bt-vendor/
@@ -30,3 +30,12 @@ Thumbs.db
 
 # 编辑器/工具状态
 .opencode/
+.pytest_tmp*
+.pt_x*
+
+# ��ѡ�ɳ�:ҳ����ɾ����д�ĸ��Ի�����,����汾��(�»����ճ����)
+config/watchlist.yaml
+
+# pytest 临时输出(DSH 沙箱残留,不入版本控制)
+.pt_*
+pytest_*.txt

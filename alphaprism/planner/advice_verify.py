@@ -23,9 +23,9 @@ logger = logging.getLogger(__name__)
 
 HORIZONS = (1, 3, 5, 10)          # 1d 短线参考、3/5 主流、10d 中期(借鉴 outcome evaluator)
 VERIFY_THRESHOLD_PCT = 5.0        # 初值,待校准
-CATEGORY_UP = {"加仓", "买入", "试多"}
+CATEGORY_UP = {"加仓", "买入", "试多", "回补"}   # 回补:个股 v5 档位→动作(风险全解除→满仓)
 CATEGORY_DOWN = {"减仓", "砍仓", "清仓"}
-NO_DIRECTION = {"持有", "观望", "等待确认"}
+NO_DIRECTION = {"持有", "观望", "等待确认", "风险监控", "警惕"}   # 警惕:个股 v5.2 关注档动作
 SIGNAL_UP = {"试多候选", "右侧初现候选"}
 SIGNAL_DOWN = {"减仓参考", "破位退出", "清仓止损"}
 SIGNAL_NONE = {"观望", "蓄势候选"}
@@ -56,6 +56,30 @@ def _direction(arch: dict) -> str | None:
     return None
 
 
+def _stock_closes(sym: str, t0: str, n_day: int) -> list[float]:
+    """个股日线回退源:v5 个股建议(symbol=A股代码)的K线在 data/kline_cache,
+    不在 etf_kline_daily;读缓存 CSV 取 t0 之后前 n_day 根收盘。
+    仅对个股板块前缀(00/30/60/68)生效——ETF(51/15/56/58)的 csv 也在同一缓存
+    目录里,若不设前缀守卫,ETF 的"K线不足"单测会被误判为有数据。"""
+    if sym[:2] not in ("00", "30", "60", "68"):
+        return []
+    from ..config import PROJECT_ROOT
+    path = PROJECT_ROOT / "data" / "kline_cache" / f"{sym}_daily.csv"
+    if not path.exists():
+        return []
+    try:
+        import pandas as pd
+        df = pd.read_csv(path)
+        df["trade_date"] = df["trade_date"].astype(str)
+        rows = df[df["trade_date"] > t0].sort_values("trade_date")
+        if len(rows) < n_day:
+            return []
+        return [float(v) for v in rows["close"].iloc[:n_day]]
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("个股K线回退读取失败 %s: %s", sym, exc)
+        return []
+
+
 def _verify_one(conn, arch: dict, n_day: int) -> tuple[str, float | None, int | None]:
     """单条建议 N 日验证:返回 (outcome, move_pct, direction_correct)。"""
     sym = str(arch.get("symbol", ""))
@@ -67,9 +91,12 @@ def _verify_one(conn, arch: dict, n_day: int) -> tuple[str, float | None, int | 
     rows = conn.execute(
         "SELECT close FROM etf_kline_daily WHERE symbol=? AND trade_date > ? "
         "ORDER BY trade_date ASC LIMIT ?", (sym, t0, n_day)).fetchall()
-    if len(rows) < n_day:
+    closes = [float(r["close"]) for r in rows]
+    if len(closes) < n_day:
+        closes = _stock_closes(sym, t0, n_day)      # 个股:缓存 CSV 回退
+    if len(closes) < n_day:
         return "无法判定", None, None      # 未到期 / K线不足
-    c_n = float(rows[n_day - 1]["close"])
+    c_n = closes[n_day - 1]
     move = round((c_n / float(anchor) - 1) * 100, 2)
     if direction == "up":
         out = ("应验" if move >= VERIFY_THRESHOLD_PCT

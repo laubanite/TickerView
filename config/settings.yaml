@@ -50,6 +50,11 @@ news:
 # 30分钟数据拉取窗口(交易日;akshare 分钟接口历史有限)
 kline_30m_days: 10
 
+# 盘中个股模式(docs/盘中个股模式方案-2026-09.md §4):feature flag,
+# 出问题可整体关闭;watchlist 条目可用 type: etf|stock 显式覆盖前缀自动判定。
+intraday:
+  stock_mode: true
+
 # 日报输出目录
 report_dir: "reports"
 

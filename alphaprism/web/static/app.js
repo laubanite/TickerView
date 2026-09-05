@@ -91,6 +91,8 @@ const app = createApp({
       wlMsg: "",
       wlError: "",
       // 盘中技术快照两张卡(2026-08-22):数据快照(确定性)+ 深入分析(LLM),完全独立
+      // 2026-09-04 盘中模式切换:ETF 模式 / 个股模式(风险解读),标签过滤 chips 与按钮
+      snapMode: "etf",        // 'etf' | 'stock'(仅 UI 状态,类型判定以后端 _snapshot_kind 为准)
       snapFacts: "",          // 卡1 数据快照(程序计算,不经过 LLM)
       snapFactsError: "",
       snapFactsLoading: false,
@@ -273,6 +275,14 @@ const app = createApp({
         ma10v: n >= 10 ? avg(vol.slice(-10)) : null,
       };
     },
+    snapChips() {
+      // 盘中快照 chips 按模式过滤:watchlist 显式 type 优先,否则代码前缀(5/1=ETF)
+      const inMode = (w) => {
+        const t = w.type || ((/^5|^1/.test(String(w.symbol)) && String(w.symbol).length === 6) ? "etf" : "stock");
+        return t === this.snapMode;
+      };
+      return this.watchlist.filter(inMode);
+    },
     latestMorningEntry() {
       // 最新一条盘前盯盘记录(含隔夜重要消息),按日期倒序取第一条
       const entries = this.bm?.daily?.journal || [];
@@ -387,7 +397,11 @@ const app = createApp({
       if (r.ok && r.items.length) {
         this.watchlist = r.items;
         if (!this.current) this.select(r.items[0].symbol);
-        if (!this.techCode) this.techCode = r.items[0].symbol;
+        if (!this.techCode) {
+          // 默认选中当前模式的首只(可能为空:该模式尚无自选标的)
+          const first = this.snapChips[0];
+          this.techCode = first ? first.symbol : "";
+        }
       }
     },
     async select(sym) {
@@ -397,6 +411,27 @@ const app = createApp({
       const r = await api("/api/quote?symbol=" + sym);
       if (r.ok) this.currentQuote = r.snapshot;
       this.loadKline();
+    },
+
+    // ---- 盘中快照模式切换(2026-09-04 个股模式):切模式清卡并选中该模式首只 ----
+    setSnapMode(m) {
+      if (this.snapMode === m) return;
+      this.snapMode = m;
+      // 清空三卡与一句话,防止上个模式的残留内容误导
+      this.snapFacts = ""; this.snapFactsError = "";
+      this.snapAnalysis = ""; this.snapAnalysisError = ""; this.snapAnalysisAt = "";
+      this.snapSignal = null; this.snapAt = "";
+      this.cfMarkdown = ""; this.cfError = "";
+      const first = this.snapChips[0];
+      // 空模式必须清空 techCode:否则「刷新快照」会对着上一模式的目标刷新
+      this.techCode = first ? first.symbol : "";
+    },
+    selectTech(sym) {
+      // 仅切换选中标的不自动拉取(与原 chips 行为一致);跨模式点击时跟随切模式
+      const w = this.watchlist.find((x) => x.symbol === sym);
+      const t = (w && w.type) || ((/^5|^1/.test(String(sym)) && String(sym).length === 6) ? "etf" : "stock");
+      this.snapMode = t === "etf" ? "etf" : "stock";
+      this.techCode = sym;
     },
 
     // ---- 自选股管理(§5.6) ----
@@ -920,10 +955,12 @@ const app = createApp({
     },
     floatSnapDistance(m, price) {
       // 距最近档:前端用现价 vs anchors 确定性重算(不覆盖 marker 文本)
+      // anchor_price 是个股建议的记录基准价(验证日历用),不是操作价位档,
+      // 不参与距离展示(v5.6.2 修复:"距0.0%anchor_price"键名溢出)。
       if (price == null || !m.anchors || !Object.keys(m.anchors).length) return null;
       let best = null, bestName = "";
       for (const [name, v] of Object.entries(m.anchors)) {
-        if (v == null) continue;
+        if (v == null || name === "anchor_price") continue;
         const d = Math.abs(price - v) / price * 100;
         if (best == null || d < best) { best = d; bestName = name; }
       }
@@ -1132,6 +1169,7 @@ const app = createApp({
       const lines = esc(md).split(/\r?\n/);
       let html = "";
       let inList = false, listType = "ul", tableRows = [];
+      let blankPending = false;   // 2026-09-04:空行暂不断列表,下一个列表项续编号(修复"序号全是1")
       const flushTable = () => {
         if (!tableRows.length) return;
         html += "<table class='mk'>" + tableRows.map((r, i) => {
@@ -1143,27 +1181,30 @@ const app = createApp({
       const flushList = () => { if (inList) { html += `</${listType}>`; inList = false; } };
       for (const raw of lines) {
         const s = raw.trim();
-        if (!s) { flushTable(); flushList(); continue; }
-        if (/^```/.test(s)) { flushTable(); flushList(); continue; }   // ```markdown 围栏行跳过,内容按正文渲染
+        if (!s) { flushTable(); blankPending = true; continue; }
+        if (/^```/.test(s)) { flushTable(); flushList(); blankPending = false; continue; }   // ```markdown 围栏行跳过,内容按正文渲染
         if (s.startsWith("|") && s.endsWith("|")) {
           const cells = s.replace(/^\||\|$/g, "").split("|").map((c) => inline(c.trim()));
           if (cells.every((c) => /^:?-+:?$/.test(c))) continue;   // 分隔行
+          flushList(); blankPending = false;
           tableRows.push(cells);
           continue;
         } else if (tableRows.length) { flushTable(); }
-        flushList();
-        const hm = s.match(/^(#{1,6})\s+(.*)$/);
-        if (hm) { html += `<h${hm[1].length}>${inline(hm[2])}</h${hm[1].length}>`; continue; }
-        if (s.startsWith(">")) { html += `<blockquote>${inline(s.replace(/^>\s?/, ""))}</blockquote>`; continue; }
-        if (/^[-*_]{3,}$/.test(s)) { html += "<hr>"; continue; }
         const um = s.match(/^[-*]\s+(.*)$/);
         const om = s.match(/^\d+[.)]\s+(.*)$/);
         if (um || om) {
           const type = om ? "ol" : "ul";
+          // 空行后的同类型列表项续接编号;类型切换才断开重开
           if (!inList || listType !== type) { flushList(); html += `<${type}>`; inList = true; listType = type; }
+          blankPending = false;
           html += `<li>${inline((um || om)[1])}</li>`;
           continue;
         }
+        flushList(); blankPending = false;
+        const hm = s.match(/^(#{1,6})\s+(.*)$/);
+        if (hm) { html += `<h${hm[1].length}>${inline(hm[2])}</h${hm[1].length}>`; continue; }
+        if (s.startsWith(">")) { html += `<blockquote>${inline(s.replace(/^>\s?/, ""))}</blockquote>`; continue; }
+        if (/^[-*_]{3,}$/.test(s)) { html += "<hr>"; continue; }
         html += `<p>${inline(s)}</p>`;
       }
       flushTable(); flushList();
@@ -1359,7 +1400,8 @@ const app = createApp({
     },
     vcTitle(it) {
       const mv = (v) => (v == null ? "" : ` 涨跌${v > 0 ? "+" : ""}${v}%`);
-      const head = `${this.shortName(it.name) || it.symbol} · ${it.category || ""} ${it.state_word || ""}`;
+      const head = `${this.shortName(it.name) || it.symbol}${it.name ? `(${it.symbol})` : ""}`
+        + ` · 建议:${it.category || "—"} · 状态:${it.state_word || "—"}`;
       if (!it.direction) return `${head}\n无方向(观望/持有) · 不参与验证,仅留痕`;
       const d3 = it.out3 == null ? "未到期" : `${it.out3}${mv(it.move3)}`;
       const d5 = it.out5 == null ? "未到期" : `${it.out5}${mv(it.move5)}`;

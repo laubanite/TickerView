@@ -23,6 +23,7 @@ from ..planner.parser import parse_file as parse_battlemap
 from ..backtest_map import run_map_backtest
 from ..fetchers import fuyao
 from ..fetchers.etf_kline import fetch_30m, fetch_daily, fetch_name
+from ..fetchers.stock_qt import fetch_stock_snapshot
 
 logger = logging.getLogger(__name__)
 
@@ -130,6 +131,9 @@ def _ensure_verify_klines(conn) -> None:
 _SNAP_CACHE: dict[str, tuple[float, dict]] = {}
 SNAP_TTL_SEC = 30.0
 
+# 个股名称缓存(验证日历兜底用;进程生命周期内有效,qt 一次拉取)
+_stock_name_cache: dict[str, str | None] = {}
+
 
 def _deterministic_snapshot(code: str, cfg) -> tuple[dict, str, dict]:
     """拉实时 → 生成确定性建议 → 归档(每天每标的最终方向为准)→ 缓存。
@@ -158,6 +162,27 @@ def _panel_payload_from(code: str, adv: dict) -> dict:
     from ..planner.intraday import _panel_payload
     return _panel_payload(code, adv["facts"], adv["state"], adv["anchors"],
                           adv["catalyst"])
+
+
+def _stock_mode_enabled(cfg) -> bool:
+    """盘中个股模式 feature flag(方案 §4:settings.yaml `intraday.stock_mode`,
+    缺省开;出问题可整体关闭且不影响 ETF 路径)。"""
+    try:
+        return bool(cfg.get("intraday", "stock_mode", default=True))
+    except Exception:  # noqa: BLE001
+        return True
+
+
+def _snapshot_kind(code: str, cfg) -> str:
+    """快照路由类型:watchlist 显式 type 覆盖 > 代码前缀自动(方案 §4)。"""
+    from ..fetchers.stock_qt import stock_type
+    try:
+        for w in (cfg.watchlist or []):
+            if str(w.get("symbol")) == code and w.get("type") in ("etf", "stock"):
+                return str(w["type"])
+    except Exception:  # noqa: BLE001
+        pass
+    return stock_type(code)
 
 
 def create_app() -> Flask:
@@ -215,7 +240,10 @@ def create_app() -> Flask:
                 items = _load()
                 if any(i["symbol"] == sym for i in items):
                     return jsonify({"ok": True, "duplicated": True})
-                name = data.get("name") or fetch_name(sym) or f"ETF{sym}"
+                stock_name = None
+                if _snapshot_kind(sym, cfg) == "stock":
+                    stock_name = (fetch_stock_snapshot([sym]).get(sym) or {}).get("name")
+                name = data.get("name") or stock_name or fetch_name(sym) or sym
                 category = data.get("category") or "行业"
                 items.append({"symbol": sym, "name": name, "category": category})
                 _save(items)
@@ -243,13 +271,28 @@ def create_app() -> Flask:
             items = []
             # 直接读 watchlist.yaml(而非 cfg.watchlist):后者在 app 启动时缓存,
             # 看不到页面上新增/删除的标的,导致删了还在、加了不出现。
-            for w in _load():
+            wl_items = _load()
+            # 个股模式路由(方案 §4):个股走 qt 实时行情,基金快照源(fuyao)仅适用 ETF。
+            # 个股快照 = 与基金快照同构的最小键(last_price/涨跌/换手),
+            # 表格列与悬浮面板(app.js w.snapshot.last_price)零改动可用。
+            stock_syms = [str(w["symbol"]) for w in wl_items
+                          if _snapshot_kind(str(w["symbol"]), cfg) == "stock"]
+            stock_q = (fetch_stock_snapshot(stock_syms) if stock_syms else {})
+            for w in wl_items:
                 sym = str(w["symbol"])
-                snap = fuyao.fetch_fund_snapshot(sym)
+                if _snapshot_kind(sym, cfg) == "etf":
+                    snap = fuyao.fetch_fund_snapshot(sym)
+                else:
+                    q = stock_q.get(sym)
+                    snap = ({"last_price": q.get("price"),
+                             "price_change_ratio_pct": q.get("pct_chg"),
+                             "turnover_ratio_pct": q.get("turnover_pct")} if q else None)
                 items.append({
                     "symbol": sym,
-                    "name": w.get("name") or fetch_name(sym) or sym,
+                    "name": (w.get("name") or fetch_name(sym)
+                             or (stock_q.get(sym) or {}).get("name") or sym),
                     "category": w.get("category", ""),
+                    "type": _snapshot_kind(sym, cfg),
                     "snapshot": snap,
                 })
             return jsonify({"ok": True, "items": items})
@@ -284,6 +327,32 @@ def create_app() -> Flask:
         code = request.args.get("code", "")
         if not code:
             return jsonify({"ok": False, "error": "缺少 code"}), 400
+        # ---- 个股模式路由(方案 §4):风险监控管道,ETF 路径不动 ----
+        if _stock_mode_enabled(cfg) and _snapshot_kind(code, cfg) == "stock":
+            try:
+                from ..planner.stock_risk import (archive_stock_risk,
+                                                  build_stock_risk_advice)
+
+                adv = build_stock_risk_advice(code, cfg)
+                signal = {
+                    "one_sentence": adv["one_sentence"],
+                    "signal_type": adv["signal_type"],
+                    "state_word": adv["state"].get("state_word", ""),
+                    "scenario": adv["state"].get("scenario", ""),
+                    "risk_level": (adv["catalyst"] or {}).get("risk_level", "正常"),
+                    # v5:方向性动作(减仓/清仓)时 panel.anchors 带当日锚定价,与 ETF 同构
+                    "anchor_price": (adv.get("panel") or {}).get("anchors", {})
+                    .get("anchor_price"),
+                    "trigger": {}, "invalidation": {},
+                }
+                archive_stock_risk(code, adv)
+                return jsonify({"ok": True, "markdown": adv["markdown"],
+                                "panel": adv.get("panel", {}), "signal": signal,
+                                "data_at": adv["facts"].get("now", ""),
+                                "category": adv["category"], "mode": "stock"})
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("个股风险快照失败 %s: %s", code, exc)
+                return jsonify({"ok": False, "error": str(exc)}), 502
         try:
             facts, md, adv = _deterministic_snapshot(code, cfg)
             panel = _panel_payload_from(code, adv)
@@ -309,6 +378,18 @@ def create_app() -> Flask:
         code = request.args.get("code", "")
         if not code:
             return jsonify({"ok": False, "error": "缺少 code"}), 400
+        # ---- 个股模式:A 档风险解读(用户拍板 2026-09-04;v5 放行动作转译)
+        # ——机制复用深入分析 pipeline(LLM 层/校验打回/降级链),骨架换个股风险语义 ----
+        if _snapshot_kind(code, cfg) == "stock":
+            try:
+                from ..planner.stock_risk import build_stock_analysis
+
+                md, degraded, data_at = build_stock_analysis(code, cfg)
+                return jsonify({"ok": True, "markdown": md, "degraded": degraded,
+                                "data_at": data_at, "mode": "stock"})
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("个股风险解读失败 %s: %s", code, exc)
+                return jsonify({"ok": False, "error": str(exc)}), 502
         try:
             from ..planner.intraday import build_tech_analysis
 
@@ -331,6 +412,11 @@ def create_app() -> Flask:
         code = request.args.get("code", "")
         if not code:
             return jsonify({"ok": False, "error": "缺少 code"}), 400
+        # ---- 个股模式:不支持(迁移表价位源=ETF 锚点白名单;个股结构性无价位档) ----
+        if _snapshot_kind(code, cfg) == "stock":
+            return jsonify({"ok": False, "mode": "stock",
+                            "error": "个股模式不支持收盘反事实推演:迁移表依赖 ETF 锚点白名单价位档,"
+                                     "个股模式定位为风险监控,无操作价位"}), 400
         try:
             from ..planner.intraday import build_counterfactual
 
@@ -619,6 +705,19 @@ def create_app() -> Flask:
         if not sym:
             return jsonify({"ok": False, "error": "缺少 symbol"}), 400
         try:
+            if _snapshot_kind(sym, cfg) == "stock":
+                q = fetch_stock_snapshot([sym]).get(sym)
+                snap = ({"last_price": q.get("price"),
+                         "open_price": q.get("open"),
+                         "high_price": q.get("high"),
+                         "low_price": q.get("low"),
+                         "prev_close": q.get("prev_close"),
+                         "price_change_ratio_pct": q.get("pct_chg"),
+                         "volume": (q.get("volume_hand") or 0) * 100,  # 手→股(前端÷100 回手)
+                         "turnover_ratio_pct": q.get("turnover_pct"),
+                         "limit_up": q.get("limit_up"),
+                         "limit_down": q.get("limit_down")} if q else None)
+                return jsonify({"ok": True, "symbol": sym, "snapshot": snap})
             return jsonify({"ok": True, "symbol": sym,
                             "snapshot": fuyao.fetch_fund_snapshot(sym)})
         except Exception as exc:  # noqa: BLE001
@@ -813,6 +912,24 @@ def create_app() -> Flask:
                                 names.setdefault(str(w["symbol"]), str(w["name"]))
                 except Exception:  # noqa: BLE001
                     pass
+                # v5.2 名称兜底终极形态(根因修复):etf 表(仅9行)/watchlist(仅6行)
+                # 都不是"被监控标的注册表"——直接在快照输入框监控的标的(如 512480)
+                # 两边都查不到,名字解析断链。凡未解析的归档标的,统一 qt 实时取名
+                # (fetch_name 对 ETF/个股通用),进程内缓存,网络失败留空不阻断。
+                for a0 in [dict(r) for r in conn.execute(
+                        "SELECT DISTINCT symbol FROM advice_archive")]:
+                    sym0 = str(a0["symbol"])
+                    if sym0 and sym0 not in names:
+                        try:
+                            from ..fetchers.etf_kline import fetch_name
+                            nm = _stock_name_cache.get(sym0)
+                            if nm is None:
+                                nm = fetch_name(sym0)
+                                _stock_name_cache[sym0] = nm
+                            if nm:
+                                names[sym0] = nm
+                        except Exception:  # noqa: BLE001
+                            pass
                 archs = [dict(r) for r in conn.execute(
                     "SELECT id, trade_date, symbol, anchor_price, state_word, category,"
                     " advice_md, snapshot_md, degraded, verdict FROM advice_archive"

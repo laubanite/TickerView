@@ -40,8 +40,13 @@ _CHUNK_DAYS = 300
 
 
 def _tx_symbol(symbol: str) -> str:
-    """ETF 代码 → 腾讯符号:5 开头(沪)加 sh,1 开头(深)加 sz。"""
-    prefix = "sh" if symbol.startswith("5") else "sz"
+    """代码 → 腾讯符号:5/6/9 开头(沪:ETF 与沪股),1/3/0 开头(深),4/8 开头(北交所)。"""
+    if symbol.startswith(("5", "6", "9")):
+        prefix = "sh"
+    elif symbol.startswith(("4", "8")):
+        prefix = "bj"
+    else:
+        prefix = "sz"
     return f"{prefix}{symbol}"
 
 
@@ -121,10 +126,21 @@ def fetch_index_daily(ths_code: str, start_date: str, end_date: str) -> pd.DataF
 
 
 def _tencent_bars_to_df(bars: list[list], symbol: str) -> pd.DataFrame:
-    """腾讯日线 bar [date, open, close, high, low, volume] → 内部字段 DataFrame。"""
+    """腾讯日线 bar [date, open, close, high, low, volume, ...] → 内部字段 DataFrame。
+
+    个股 bar 比 ETF 多出成交额等尾随字段(2026-09-04 实测 7 列),取前 6 列并
+    对不足行补齐 —— 否则 pd.DataFrame 按 6 列名建 7 列数据直接抛
+    "6 columns passed, passed data had 7 columns"(个股日K 报错的根因)。
+    """
     if not bars:
         return pd.DataFrame()
-    df = pd.DataFrame(bars, columns=["trade_date", "open", "close", "high", "low", "volume"])
+    rows = []
+    for b in bars:
+        r = list(b[:6])
+        if len(r) < 6:
+            r += [None] * (6 - len(r))
+        rows.append(r)
+    df = pd.DataFrame(rows, columns=["trade_date", "open", "close", "high", "low", "volume"])
     df["symbol"] = symbol
     df["amount"] = None
     df["turnover"] = None
