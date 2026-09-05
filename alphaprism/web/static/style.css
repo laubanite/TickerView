@@ -1,4 +1,4 @@
-/* AlphaPrism 行情页 · StableVault 暗色交易所风格 */
+/* TickerView 行情页 · StableVault 暗色交易所风格 */
 :root{
   --bg:#070a0b; --panel:#131718; --panel2:#101415; --line:#232a2d;
   --text:#d4d7da; --dim:#8a9299; --red:#f23645; --green:#089981;
@@ -173,6 +173,24 @@ table.mk textarea:focus{outline:none;border-color:var(--accent);box-shadow:var(-
 .add-row{display:flex;align-items:center;gap:8px;margin:8px 0}
 .add-row .ctl{flex:1;min-width:0;width:auto}
 .add-row .btn{flex:none;margin-top:0}
+
+/* ---- 标的搜索联想下拉(同花顺式:名称/拼音/代码 → 候选) ---- */
+.sug-anchor{position:relative;flex:1;min-width:0;display:flex}
+.sug-anchor .ctl{flex:1;min-width:0}
+.sug-list{position:absolute;top:calc(100% + 4px);left:0;right:0;z-index:60;
+  background:var(--panel);border:1px solid #2a3236;border-radius:var(--r-sm);
+  box-shadow:0 8px 24px rgba(0,0,0,.45);max-height:264px;overflow-y:auto;overflow-x:hidden}
+.sug-list::-webkit-scrollbar{width:4px;height:4px}
+.sug-list::-webkit-scrollbar-thumb{background:rgba(255,255,255,.14);border-radius:2px}
+.sug-list::-webkit-scrollbar-thumb:hover{background:rgba(255,255,255,.28)}
+.sug-item{display:flex;align-items:center;justify-content:space-between;gap:8px;
+  padding:6px 10px;font-size:12px;cursor:pointer;border-left:2px solid transparent}
+.sug-item:hover,.sug-item.on{background:#1a2224;border-left-color:var(--accent)}
+.sug-item .s-name{color:var(--text);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.sug-item .s-meta{color:var(--dim);font-size:11px;white-space:nowrap;flex:none}
+.sug-item.dup{opacity:.45}
+.sug-item.dup .s-meta i{font-style:normal;color:var(--accent)}
+.sug-empty{padding:8px 10px;color:var(--dim);font-size:11px}
 /* 统一空状态 */
 .empty{display:flex;flex-direction:column;align-items:center;justify-content:center;gap:6px;text-align:center;padding:28px 16px;min-height:112px}
 .empty .e-ico{width:30px;height:30px;color:#3a4446;flex:none}

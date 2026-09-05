@@ -300,6 +300,20 @@ def create_app() -> Flask:
             logger.warning("自选股操作失败: %s", exc)
             return jsonify({"ok": False, "error": str(exc)}), 502
 
+    # ------------------------------------------------------------ 标的搜索联想(同花顺式关键词添加)
+    @app.route("/api/suggest")
+    def api_suggest():
+        """关键词 → 候选标的(名称/拼音缩写/代码均可,中文/ETF 过滤见 fetchers.suggest)。"""
+        q = str(request.args.get("q", "")).strip()
+        if not q:
+            return jsonify({"ok": True, "items": []})
+        try:
+            from ..fetchers.suggest import search_suggestions
+            return jsonify({"ok": True, "items": search_suggestions(q)})
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("标的联想失败: %s", exc)
+            return jsonify({"ok": False, "error": str(exc)}), 502
+
     # ------------------------------------------------------------ 盘中快照(§5.4)
     @app.route("/api/snapshot")
     def api_snapshot():

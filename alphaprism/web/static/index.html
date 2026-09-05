@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>AlphaPrism 行情页</title>
+<title>TickerView 行情页</title>
 <link rel="stylesheet" href="/static/style.css">
 <!-- 本地 vendor:Vue3 + ECharts 已随仓库内置(CDN 常被墙/不可达导致整页模板未渲染,
      故改为本地静态引用,离线/内网也能用) -->
@@ -15,7 +15,7 @@
 <div id="app">
   <!-- ===== 顶栏 ===== -->
   <header>
-    <div class="logo">Alpha<span>Prism</span></div>
+    <div class="logo">Ticker<span>View</span></div>
     <nav>
       <button :class="{on: tab==='pm'}" @click="setTab('pm')">盘前</button>
       <button :class="{on: tab==='pz'}" @click="setTab('pz')">盘中</button>
@@ -45,7 +45,21 @@
       <div class="card">
         <h3>自选股 <span class="dim">速查表驱动 · 点击切换图表</span></h3>
         <div class="add-row">
-          <input class="ctl" v-model="newSym" placeholder="输入代码添加" @keyup.enter="addSymbol">
+          <div class="sug-anchor">
+            <input class="ctl" v-model="newSym" placeholder="代码或关键词,如:半导体 / bdt"
+                   @input="onSymInput" @focus="onSymInput" @blur="onSymBlur"
+                   @keydown.down.prevent="sugMove(1)" @keydown.up.prevent="sugMove(-1)"
+                   @keydown.enter="onSymEnter" @keydown.esc="sugClose">
+            <div v-if="sugOpen" class="sug-list">
+              <div v-for="(s, i) in sugItems" :key="s.symbol" class="sug-item"
+                   :class="{on: i===sugActive, dup: inPool(s.symbol)}"
+                   @mousedown.prevent="pickSug(s)">
+                <span class="s-name">{{s.name}}</span>
+                <span class="s-meta">{{s.symbol}} · {{s.kind}}<i v-if="inPool(s.symbol)"> · 已入池</i></span>
+              </div>
+              <div v-if="!sugItems.length" class="sug-empty">无匹配标的——支持 名称 / 拼音缩写 / 代码</div>
+            </div>
+          </div>
           <button class="btn" @click="addSymbol">＋ 添加</button>
         </div>
         <div v-if="wlMsg" class="dim err-line" style="font-size:11px;margin-bottom:4px">
@@ -573,7 +587,7 @@
   <!-- ===== 悬浮面板(里程碑7)::自选股池唯一真源 · 持仓高亮 · 标记/涨跌/换手/量/额可选 · 宽度自适应 ===== -->
   <div class="float" id="floatPanel" :style="{width: floatWidth + 'px'}">
     <div class="f-head">
-      <span class="f-t">AlphaPrism</span>
+      <span class="f-t">TickerView</span>
       <span class="dim f-sub">自选股 · {{floatShown}}/{{watchlist.length}}</span>
       <span class="dim f-time" v-if="floatUpdated">{{floatUpdated}}</span>
     </div>

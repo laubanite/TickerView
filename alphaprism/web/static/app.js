@@ -1,4 +1,4 @@
-/* AlphaPrism 行情页前端(里程碑6)· Vue 3 + ECharts */
+/* TickerView 行情页前端(里程碑6)· Vue 3 + ECharts */
 const { createApp } = Vue;
 
 const api = (path) => fetch(path).then((r) => r.json());
@@ -54,6 +54,11 @@ const app = createApp({
       mgSaved: "",
       // 自选股管理(§5.6)
       newSym: "",
+      sugOpen: false,        // 标的搜索联想下拉(同花顺式:名称/拼音/代码)
+      sugItems: [],          // 候选 [{symbol,name,market,kind,pinyin}]
+      sugActive: -1,         // 键盘高亮行
+      sugTimer: null,        // 输入防抖
+      sugSeq: 0,             // 响应竞态防护:只认最后一次击键的响应
       // 设置(重构为居中弹窗 Modal · 2026-08-29):左侧导航(模型/持仓/通用)+ 右侧内容区
       settingsOpen: false,    // 弹窗开关(右上角「设置」按钮;X/遮罩/Esc 关闭)
       settingsPane: "model",  // 当前面板键: model | holdings | general
@@ -435,16 +440,69 @@ const app = createApp({
     },
 
     // ---- 自选股管理(§5.6) ----
-    async addSymbol() {
-      const sym = this.newSym.trim();
+    // 标的搜索联想(同花顺式):名称/拼音缩写/代码 → 候选下拉,点选/回车直接入池
+    inPool(sym) {
+      return this.watchlist.some((w) => w.symbol === sym);
+    },
+    onSymInput() {
+      if (this.sugTimer) clearTimeout(this.sugTimer);
+      const q = this.newSym.trim();
+      if (!q) { this.sugClose(); return; }
+      // 纯6位代码不联想(现状已是直接添加的快捷路径,回车/点按钮即入池)
+      if (/^\d{6}$/.test(q)) { this.sugClose(); return; }
+      this.sugTimer = setTimeout(() => this.fetchSug(q), 220);
+    },
+    async fetchSug(q) {
+      const seq = ++this.sugSeq;
+      try {
+        const r = await api("/api/suggest?q=" + encodeURIComponent(q));
+        if (seq !== this.sugSeq) return;          // 已有更新的击键,丢弃旧响应
+        this.sugItems = (r && r.ok && Array.isArray(r.items)) ? r.items : [];
+        this.sugActive = this.sugItems.length ? 0 : -1;
+        this.sugOpen = true;
+      } catch (e) { /* 联想失败静默,不干扰手动输入 */ }
+    },
+    sugMove(d) {
+      if (!this.sugOpen || !this.sugItems.length) return;
+      const n = this.sugItems.length;
+      this.sugActive = (this.sugActive + d + n) % n;
+    },
+    async onSymEnter() {
+      const q = this.newSym.trim();
+      if (this.sugOpen && this.sugItems.length && this.sugActive >= 0
+          && !/^\d{6}$/.test(q)) {
+        await this.pickSug(this.sugItems[this.sugActive]);
+      } else {
+        await this.addSymbol();
+      }
+    },
+    async pickSug(s) {
+      this.sugClose();
+      this.newSym = "";
+      await this.addSymbol(s.symbol, s.name);
+    },
+    sugClose() {
+      this.sugOpen = false;
+      this.sugItems = [];
+      this.sugActive = -1;
+      if (this.sugTimer) { clearTimeout(this.sugTimer); this.sugTimer = null; }
+    },
+    onSymBlur() {
+      // mousedown.prevent 已保证点击候选项先于 blur 生效;延迟兜底纯点击外部收起
+      setTimeout(() => { this.sugOpen = false; }, 120);
+    },
+    async addSymbol(symArg, nameArg) {
+      const sym = (symArg || this.newSym).trim();
       if (!sym) { this.wlError = "请输入代码"; return; }
+      this.sugClose();
       this.wlError = "";
       this.wlMsg = "";
       try {
         const resp = await fetch("/api/watchlist", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ symbol: sym }),
+          // 点选候选项时随带名称,后端免一次 fetch_name 兜底
+          body: JSON.stringify(nameArg ? { symbol: sym, name: nameArg } : { symbol: sym }),
         });
         const r = await resp.json();
         if (!r.ok) { this.wlError = r.error || "添加失败"; return; }
