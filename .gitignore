@@ -21,9 +21,8 @@ __pycache__/
 .DS_Store
 Thumbs.db
 
-# �ز����汾�ػ���(conda prefix,���������԰���)
+# 回测相关本地环境(conda prefix / vendor,含大依赖不入库)
 .bt-env/
-
 .bt-vendor/
 .bt-tmp/
 .bt-pkgs/
@@ -32,10 +31,29 @@ Thumbs.db
 .opencode/
 .pytest_tmp*
 .pt_x*
-
-# ��ѡ�ɳ�:ҳ����ɾ����д�ĸ��Ի�����,����汾��(�»����ճ����)
-config/watchlist.yaml
-
-# pytest 临时输出(DSH 沙箱残留,不入版本控制)
 .pt_*
 pytest_*.txt
+
+# 自选股池:页面增删写入的个性化配置,不入版本库(新装首启为空,自行添加)
+config/watchlist.yaml
+# 运行时 Web 偏好(安装态实际落在 %APPDATA%\TickerView\config)
+config/web.yaml
+
+# 机器专属启动器/快捷方式(含绝对路径,对他人无用且泄露本机目录)
+*.lnk
+TickerView.bat
+bin/tickerview.bat
+
+# 二期打包产物(不入版本控制)
+build/
+dist/
+installer/Output/
+*.manifest
+# 沙箱/构建临时目录与备份(本机可直接删)
+.tmp/
+.piptmp/
+backups/
+# 图标运行时临时件(pystray 生成的无扩展名临时图标);保留真正的 tray_icon.*
+alphaprism/planner/assets/tray_*
+!alphaprism/planner/assets/tray_icon.png
+!alphaprism/planner/assets/tray_icon.ico

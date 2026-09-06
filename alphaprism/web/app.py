@@ -186,6 +186,9 @@ def _snapshot_kind(code: str, cfg) -> str:
 
 
 def create_app() -> Flask:
+    from ..paths import ensure_user_dirs
+
+    ensure_user_dirs()  # 冻结态首启建 %APPDATA%\TickerView 并播种出厂 watchlist
     app = Flask(__name__, static_folder=str(WEB_DIR / "static"), static_url_path="/static")
     cfg = Config()
 
@@ -277,16 +280,24 @@ def create_app() -> Flask:
             # 表格列与悬浮面板(app.js w.snapshot.last_price)零改动可用。
             stock_syms = [str(w["symbol"]) for w in wl_items
                           if _snapshot_kind(str(w["symbol"]), cfg) == "stock"]
-            stock_q = (fetch_stock_snapshot(stock_syms) if stock_syms else {})
+            try:
+                stock_q = (fetch_stock_snapshot(stock_syms) if stock_syms else {})
+            except Exception as exc:  # noqa: BLE001  批量个股快照失败不拖垮整表
+                logger.warning("个股批量快照失败,按无数据处理: %s", exc)
+                stock_q = {}
             for w in wl_items:
                 sym = str(w["symbol"])
-                if _snapshot_kind(sym, cfg) == "etf":
-                    snap = fuyao.fetch_fund_snapshot(sym)
-                else:
-                    q = stock_q.get(sym)
-                    snap = ({"last_price": q.get("price"),
-                             "price_change_ratio_pct": q.get("pct_chg"),
-                             "turnover_ratio_pct": q.get("turnover_pct")} if q else None)
+                try:
+                    if _snapshot_kind(sym, cfg) == "etf":
+                        snap = fuyao.fetch_fund_snapshot(sym)
+                    else:
+                        q = stock_q.get(sym)
+                        snap = ({"last_price": q.get("price"),
+                                 "price_change_ratio_pct": q.get("pct_chg"),
+                                 "turnover_ratio_pct": q.get("turnover_pct")} if q else None)
+                except Exception as exc:  # noqa: BLE001  单只快照失败→该只留空,列表照常渲染
+                    logger.warning("[%s] 快照失败,按无数据处理: %s", sym, exc)
+                    snap = None
                 items.append({
                     "symbol": sym,
                     "name": (w.get("name") or fetch_name(sym)
@@ -540,16 +551,37 @@ def create_app() -> Flask:
     @app.route("/api/refresh-config", methods=["POST"])
     def api_refresh_config_save():
         data = request.get_json(force=True) or {}
-        try:
-            sec = int(data.get("refresh_interval_sec"))
-        except (TypeError, ValueError):
-            return jsonify({"ok": False, "error": "刷新间隔需为整数秒"}), 400
-        if sec < 1 or sec > 3600:
-            return jsonify({"ok": False, "error": "刷新间隔需在 1-3600 秒之间"}), 400
+        patch: dict = {}
+        if "refresh_interval_sec" in data:
+            try:
+                sec = int(data.get("refresh_interval_sec"))
+            except (TypeError, ValueError):
+                return jsonify({"ok": False, "error": "刷新间隔需为整数秒"}), 400
+            if sec < 1 or sec > 3600:
+                return jsonify({"ok": False, "error": "刷新间隔需在 1-3600 秒之间"}), 400
+            patch["refresh_interval_sec"] = sec
+        if "panel_start_hidden" in data:
+            patch["panel_start_hidden"] = bool(data.get("panel_start_hidden"))
         from ..webprefs import save_prefs
 
-        cur = save_prefs({"refresh_interval_sec": sec})
-        return jsonify({"ok": True, "refresh_interval_sec": cur["refresh_interval_sec"]})
+        cur = save_prefs(patch)
+        return jsonify({"ok": True, **cur})
+
+    # ------------------------------------------------------------ 设置:开机自启(托盘宿主,里程碑7 追加)
+    @app.route("/api/panel/autostart")
+    def api_panel_autostart_get():
+        from ..autostart import is_enabled
+
+        return jsonify({"ok": True, "enabled": is_enabled()})
+
+    @app.route("/api/panel/autostart", methods=["POST"])
+    def api_panel_autostart_save():
+        data = request.get_json(force=True) or {}
+        from ..autostart import set_enabled
+
+        on = bool(data.get("enabled"))
+        set_enabled(on)
+        return jsonify({"ok": True, "enabled": on})
 
     @app.route("/api/keys")
     def api_keys():

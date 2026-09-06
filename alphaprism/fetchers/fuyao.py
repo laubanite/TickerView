@@ -57,12 +57,62 @@ def _get(url: str, params: dict) -> dict:
     return js
 
 
+def _index_tx_symbol(thscode: str) -> str:
+    """同花顺指数码 → 腾讯符号:000001.SH → sh000001;399001.SZ → sz399001。"""
+    num, _, mkt = thscode.partition(".")
+    return ("sh" if mkt.upper() == "SH" else "sz") + num
+
+
+def _tencent_index_snapshot(thscodes: list[str]) -> dict[str, dict]:
+    """腾讯 qt.gtimg.cn 指数实时快照(免 key)→ 与同花顺同形状 {thscode:{last_price,...}}。"""
+    from .etf_kline import HEADERS
+
+    out: dict[str, dict] = {}
+    for code in thscodes:
+        try:
+            resp = requests.get(f"https://qt.gtimg.cn/q={_index_tx_symbol(code)}",
+                                headers=HEADERS, timeout=10)
+            resp.encoding = "gbk"
+            line = resp.text.strip().split(";")[0]
+            if "=" not in line:
+                continue
+            f = line.split("=")[1].strip('"').split("~")
+            if len(f) < 33:
+                continue
+
+            def _fl(i):
+                try:
+                    return float(f[i]) if f[i] not in ("", "-") else None
+                except (ValueError, TypeError):
+                    return None
+
+            price, prev = _fl(3), _fl(4)
+            if price is None or prev is None or prev <= 0:
+                continue
+            # 指数 qt 字段 31 是"涨跌额"(与 ETF 布局不同),故百分比一律由 现价/昨收 现算
+            chg = round((price / prev - 1) * 100, 3)
+            out[code] = {"thscode": code, "last_price": price,
+                         "price_change_ratio_pct": round(chg, 3), "pre_close": prev,
+                         "source": "tencent"}
+        except Exception as exc:  # noqa: BLE001  单只指数失败不影响其余
+            logger.warning("[%s] 腾讯指数快照失败: %s", code, exc)
+    return out
+
+
 def fetch_index_snapshot(thscodes: list[str]) -> dict[str, dict]:
-    """批量取指数行情快照,返回 {thscode: {turnover, last_price, ...}}。"""
+    """批量取指数行情快照,返回 {thscode: {turnover, last_price, ...}}。
+    同花顺失败(缺 key / 网络 / 鉴权)一律降级腾讯 qt(免 key),绝不让指数条整块空掉。
+    """
     if not thscodes:
         return {}
-    js = _get(f"{BASE}/api/a-share-index/prices/snapshot", {"thscodes": ",".join(thscodes)})
-    return {it["thscode"]: it for it in (js.get("data") or {}).get("item", [])}
+    try:
+        js = _get(f"{BASE}/api/a-share-index/prices/snapshot", {"thscodes": ",".join(thscodes)})
+        return {it["thscode"]: it for it in (js.get("data") or {}).get("item", [])}
+    except FuyaoError as exc:
+        logger.warning("同花顺指数快照失败(%s),降级腾讯", exc)
+    except requests.RequestException as exc:
+        logger.warning("同花顺指数快照网络错误(%s),降级腾讯", exc)
+    return _tencent_index_snapshot(thscodes)
 
 
 _TRADING_DAYS_CACHE: set[str] | None = None
@@ -106,11 +156,9 @@ def fetch_fund_snapshot(symbol: str) -> dict | None:
             return snap
         logger.warning("[%s] 同花顺快照无数据,降级腾讯", symbol)
     except FuyaoError as exc:
-        # 3004/2003/4001 等一律降级,不让单只失败拖垮整个自选池
-        if "3004" in str(exc) or "2003" in str(exc) or "4001" in str(exc):
-            logger.warning("[%s] 同花顺快照失败(%s),降级腾讯", symbol, exc)
-        else:
-            raise
+        # 同花顺任何失败(缺 key / 3004 / 2003 / 4001 / 鉴权等)一律降级腾讯 qt(免 key),
+        # 绝不让单只标的的取数失败拖垮整个自选池渲染。
+        logger.warning("[%s] 同花顺快照失败(%s),降级腾讯", symbol, exc)
     except requests.RequestException as exc:
         logger.warning("[%s] 同花顺快照网络错误(%s),降级腾讯", symbol, exc)
     return _tencent_fund_snapshot(symbol)

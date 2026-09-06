@@ -9,9 +9,9 @@ import sqlite3
 from pathlib import Path
 from typing import Iterable, Sequence
 
-from .config import PROJECT_ROOT
+from .paths import DB_PATH
 
-DEFAULT_DB = PROJECT_ROOT / "data" / "alphaprism.db"
+DEFAULT_DB = DB_PATH
 
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS etf (

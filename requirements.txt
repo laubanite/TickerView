@@ -1,6 +1,15 @@
+# TickerView runtime deps (Python 3.12, Anaconda base).
+# NOTE: keep this file ASCII-only. pip on zh-CN Windows decodes it with GBK
+# when there is no BOM, so CJK comments here break `pip install -r`.
+
+# --- core data / web dashboard (m1-m6) ---
 akshare>=1.17
 pandas>=2.2
 pyyaml>=6.0
 requests>=2.31
-pywebview>=6.2   # 悬浮面板(里程碑7)
-flask>=3.0      # Web 行情页(里程碑6)
+flask>=3.0
+
+# --- tray panel (m7): desktop window + system tray + tray icon ---
+pywebview>=6.2
+pystray>=0.19
+Pillow>=10.0

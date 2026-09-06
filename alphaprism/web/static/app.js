@@ -1,6 +1,11 @@
 /* TickerView 行情页前端(里程碑6)· Vue 3 + ECharts */
 const { createApp } = Vue;
 
+// 浮窗模式(?float=1):pywebview 桌面分身加载时,只渲染悬浮面板、隐藏主界面壳
+const FLOAT_MODE = new URLSearchParams(location.search).has("float");
+// 不透明深色窗口:窗口=卡片尺寸(无透明边);卡片铺满窗口,圆角由宿主 DWM 裁
+const FP_MARGIN = 0;
+
 const api = (path) => fetch(path).then((r) => r.json());
 
 const app = createApp({
@@ -119,6 +124,9 @@ const app = createApp({
       refreshCode: "",      // 正在单只生成快照的标的
       floatOnlyHeld: false, // 「仅持仓」过滤(显示层,存 localStorage)
       floatCols: { marker: true, chg: true, turn: false, vol: false, amt: false },
+      floatMode: false,     // 浮窗模式(?float=1):仅渲染悬浮面板
+      panelStartHidden: false, // 托盘:启动即藏入系统托盘(存 config/web.yaml)
+      autoStart: false,       // 开机自启(Windows 启动项)
     };
   },
 
@@ -563,6 +571,20 @@ const app = createApp({
       if (ra.ok) this.account = ra.account || { total_capital: "", cash: "" };
       await this.loadLlm();
       this.loadRefreshConfig(config);
+      this.loadAutoStart();
+    },
+    // 仅拉持仓列表(浮窗模式用:持仓标记的唯一数据源,不牵动账户/LLM 等设置项)
+    async loadHoldings() {
+      try {
+        const r = await api("/api/holdings");
+        if (r.ok) this.holdings = r.holdings || [];
+      } catch (e) { /* 服务不可用则忽略 */ }
+    },
+    async loadAutoStart() {
+      try {
+        const r = await api("/api/panel/autostart");
+        if (r.ok) this.autoStart = !!r.enabled;
+      } catch (e) { /* 非 Windows / 服务不可用则忽略 */ }
     },
     async loadLlm() {
       // 模型面板:读取生效的 LLM 配置(profiles = 尝试顺序) + 各服务商 key 掩码
@@ -865,6 +887,9 @@ const app = createApp({
       } else if (!silent) {
         this.settingsMsg = "刷新间隔读取失败";
       }
+      if (r.ok && r.panel_start_hidden != null) {
+        this.panelStartHidden = Boolean(r.panel_start_hidden);
+      }
     },
     async saveRefreshConfig() {
       const sec = Number(this.refreshSec);
@@ -887,6 +912,59 @@ const app = createApp({
         this.restartPolling();
       } catch (e) { this.settingsMsg = String(e); }
       finally { this.refreshSaving = false; }
+    },
+    // ---- 悬浮面板:隐藏到托盘(仅浮窗模式,pywebview 桥,浏览器下静默) ----
+    floatHide() {
+      if (window.pywebview && window.pywebview.api && window.pywebview.api.hide_to_tray) {
+        try { window.pywebview.api.hide_to_tray(); } catch (e) { /* 忽略 */ }
+      }
+    },
+    // ---- 桌面分身:把透明窗口贴合到"卡片 + 四周 FP_MARGIN 透明投影边"(仅 float 模式) ----
+    fitFloatWindow() {
+      if (!FLOAT_MODE) return;
+      const el = document.getElementById("floatPanel");
+      if (!el) return;
+      const send = () => {
+        const a = window.pywebview && window.pywebview.api;
+        if (!(a && a.set_size)) return;
+        try { a.set_size(Math.ceil(el.offsetWidth) + FP_MARGIN * 2, Math.ceil(el.offsetHeight) + FP_MARGIN * 2); } catch (e) { /* 忽略 */ }
+      };
+      if (this._floatRO) { try { this._floatRO.disconnect(); } catch (e) { /* 忽略 */ } }
+      if (typeof ResizeObserver !== "undefined") {
+        this._floatRO = new ResizeObserver(send);
+        this._floatRO.observe(el);
+      }
+      send();
+    },
+    // ---- 设置:启动即藏托盘(存 config/web.yaml,重启面板后生效) ----
+    async savePanelStartHidden() {
+      try {
+        const resp = await fetch("/api/refresh-config", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ panel_start_hidden: !!this.panelStartHidden }),
+        });
+        const text = await resp.text();
+        let r = null; try { r = JSON.parse(text); } catch (e) { /* 非 JSON → 下面显式报错 */ }
+        this.settingsMsg = (r && r.ok) ? "启动即藏托盘已保存(重启面板后生效)"
+          : (r && r.error) ? r.error
+          : `HTTP ${resp.status}: ${text.slice(0, 140)}`;
+      } catch (e) { this.settingsMsg = String(e); }
+    },
+    // ---- 设置:开机自启(Windows 启动项,立即生效) ----
+    async saveAutoStart() {
+      try {
+        const resp = await fetch("/api/panel/autostart", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ enabled: !!this.autoStart }),
+        });
+        const text = await resp.text();
+        let r = null; try { r = JSON.parse(text); } catch (e) { /* 非 JSON → 下面显式报错 */ }
+        this.settingsMsg = (r && r.ok) ? (this.autoStart ? "已开启开机自启" : "已关闭开机自启")
+          : (r && r.error) ? r.error
+          : `HTTP ${resp.status}: ${text.slice(0, 140)}`;
+      } catch (e) { this.settingsMsg = String(e); }
     },
     // 轮询:顶部指数 + 候选股池 按 refreshSec 一起刷。暂停界面时也保持(盘中行情需一直最新)。
     startPolling() {
@@ -1666,6 +1744,22 @@ const app = createApp({
   },
 
   async mounted() {
+    // 浮窗模式:只加载悬浮面板所需数据(自选股 + 轮询),隐藏其余,供 pywebview 桌面分身加载
+    if (FLOAT_MODE) {
+      this.floatMode = true;
+      document.body.classList.add("float-mode");
+      this.loadWatchlist();
+      this.loadHoldings();        // 持仓标记数据源(浮窗分支此前漏加载 → 桌面面板无"持"标记)
+      this._started = true;       // 浮窗分支此前未置位 → restartPolling 守卫挡住 → 面板从不轮询(自选增删/行情不自动同步)
+      this.loadRefreshConfig();   // 读 refresh_interval_sec 并启动轮询(自选股+指数)
+      this.defaultFloatPrefs();
+      // 供托盘唤醒时补刷一次(抵消 WebView 隐藏期对定时器的节流)
+      window.__fpWake = () => { this.loadWatchlist(); this.loadHoldings(); };
+      // 把桌面窗口贴合到卡片实际尺寸(渲染后 + pywebview 桥就绪后各试一次)
+      this.$nextTick(() => this.fitFloatWindow());
+      window.addEventListener("pywebviewready", () => this.fitFloatWindow());
+      return;
+    }
     // 图表在 renderChart 里按需初始化(数据就绪、容器尺寸已定后再 echarts.init,避免
     // 提前 init 导致 dataZoom 状态损坏——见 renderChart 注释)
     this._started = true;

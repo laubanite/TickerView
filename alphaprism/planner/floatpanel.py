@@ -1,11 +1,12 @@
-"""悬浮面板(产品方案 §5.1,里程碑7):pywebview 无边框置顶小窗。
+"""悬浮面板托盘宿主(TickerView,里程碑7·终版)。
 
-只给结论,细节走快照:每行 现价 | 涨跌 | 放量/缩量 | 结论词(5档)+ 大盘门控灯。
-数据来源:check_live(核对引擎:实时快照 + 时间调整量比 + 大盘门控 J 值)。
-面板 JS 按 config/web.yaml 的 refresh_interval_sec 秒(默认 12)调 js_api.refresh() 拉最新核对;
-底部两按钮:
-- [盘中快照] → js_api.snapshot()(规则事实 + LLM 解读,差异输出)
-- [展开行情页] → 打开 http://127.0.0.1:8765(需 Web 服务在跑)
+面板视觉/数据全部来自网页端悬浮面板(单源):本进程只负责——
+ 1) 按需拉起 Web 服务(127.0.0.1:8765,若已在跑则复用);
+ 2) pywebview 无边框置顶小窗加载 http://...:port/?float=1(即网页内那块悬浮面板);
+ 3) pystray 系统托盘:左键唤醒面板,右键菜单(显示/隐藏/打开行情网页/退出)。
+
+面板页的数据由网页端 Vue 自行轮询(不走 js_api),js_api 仅保留三个桥:
+ hide_to_tray / quit_app / open_web(打开完整行情页)。
 
 用法: alphaprism panel
 """
@@ -13,190 +14,262 @@ from __future__ import annotations
 
 import logging
 import threading
+import time
+import webbrowser
 from pathlib import Path
-
-from ..config import Config
-from .checker import CONCLUSION_STYLE
+import os
 
 logger = logging.getLogger(__name__)
 
-PANEL_HTML = r"""<!DOCTYPE html>
-<html lang="zh-CN">
-<head>
-<meta charset="UTF-8">
-<title>AlphaPrism</title>
-<style>
-  :root{--bg:#10131a;--card:#171c26;--line:#232a38;--dim:#787b86;--up:#f23645;--down:#089981;--flat:#d1d4dc}
-  *{margin:0;padding:0;box-sizing:border-box}
-  body{background:var(--bg);color:var(--flat);font:12px/1.5 system-ui,"Microsoft YaHei",sans-serif;
-       user-select:none;overflow:hidden;border:1px solid var(--line)}
-  .hd{display:flex;align-items:center;gap:8px;padding:8px 10px;border-bottom:1px solid var(--line)}
-  .logo{font-weight:700;letter-spacing:.5px;font-size:13px}
-  .logo span{color:#4c8dff}
-  .gate{margin-left:auto;display:flex;align-items:center;gap:6px}
-  .dot{width:8px;height:8px;border-radius:50%;background:#089981}
-  .dot.off{background:#f23645}
-  .j{color:var(--dim);font-size:11px}
-  .list{max-height:280px;overflow-y:auto}
-  .row{display:flex;align-items:center;gap:8px;padding:7px 10px;border-bottom:1px solid #1b2130}
-  .row.dimmed{opacity:.45}
-  .nm{width:56px;font-weight:600;white-space:nowrap;overflow:hidden}
-  .px{width:58px;text-align:right}
-  .chg{width:58px;text-align:right;font-size:11px}
-  .up{color:var(--up)}.down{color:var(--down)}
-  .vol{width:40px;text-align:center;font-size:11px;color:var(--dim)}
-  .tag{flex:1;text-align:center;padding:2px 4px;border-radius:4px;font-size:11px;white-space:nowrap}
-  .t-normal{background:#262c3a;color:#9aa0ae}
-  .t-near{background:#5c4a1a;color:#ffd166}
-  .t-warn{background:#5c2a1a;color:#ff9f6e}
-  .t-hot{background:#5c1a2a;color:#ff7b8a}
-  .t-hit{background:#7a1626;color:#ff5c6c}
-  .t-ok{background:#1a4a2a;color:#6ee7a0}
-  .ft{display:flex;gap:8px;padding:8px 10px;border-top:1px solid var(--line)}
-  .btn{flex:1;background:#1d2434;color:#d1d4dc;border:1px solid var(--line);border-radius:6px;
-       padding:7px 0;font-size:12px;cursor:pointer}
-  .btn:hover{background:#26334a}
-  .btn.primary{background:#234b8c;border-color:#2f5fb0;color:#fff}
-  .snap{max-height:150px;overflow-y:auto;padding:8px 10px;border-top:1px solid var(--line);font-size:11px;color:#c6cbd6;white-space:pre-wrap;display:none}
-</style>
-</head>
-<body>
-  <div class="hd">
-    <div class="logo">Alpha<span>Prism</span></div>
-    <div class="gate">
-      <span class="dot" id="dot"></span>
-      <span id="gtext">门控…</span>
-      <span class="j" id="gj">J=—</span>
-    </div>
-  </div>
-  <div class="list" id="list"></div>
-  <div class="snap" id="snap"></div>
-  <div class="ft">
-    <button class="btn" onclick="doSnapshot()">盘中快照</button>
-    <button class="btn primary" onclick="openWeb()">展开行情页</button>
-  </div>
-<script>
-  const STYLE = {"平静":"t-normal","接近买点":"t-near","接近卖点":"t-warn","等待·缺条件":"t-hot","买点触发":"t-hit","破位":"t-hit"};
-  async function refresh() {
-    try {
-      const r = await pywebview.api.refresh();
-      render(r);
-    } catch(e) {}
-  }
-  function render(r) {
-    const g = r.gate || {};
-    const dot = document.getElementById('dot');
-    const gt = document.getElementById('gtext');
-    const gj = document.getElementById('gj');
-    if (g.open) { dot.className='dot'; gt.textContent='门控开放'; }
-    else { dot.className='dot off'; gt.textContent='门控关闭·不加仓'; }
-    gj.textContent = 'J=' + (g.j ?? '-');
-    const list = document.getElementById('list');
-    const rows = r.verdicts || [];
-    list.innerHTML = rows.map(v => {
-      const dim = v.conclusion === '平静' ? ' dimmed' : '';
-      const p = v.price != null ? Number(v.price).toFixed(3) : '-';
-      const c = v.change_pct != null ? (v.change_pct > 0 ? '+' : '') + Number(v.change_pct).toFixed(2) + '%' : '-';
-      const cls = v.change_pct > 0 ? 'up' : v.change_pct < 0 ? 'down' : '';
-      const st = STYLE[v.conclusion] || 't-normal';
-      const nm = String(v.name||'').replace(/ETF.*$/,'').replace(/.*ETF/,'') || v.code;
-      const near = v.near ? ' <span style="color:#787b86;font-size:10px">' + v.near + '</span>' : '';
-      return '<div class="row' + dim + '">' +
-        '<div class="nm">' + nm + '</div>' +
-        '<div class="px">' + p + '</div>' +
-        '<div class="chg ' + cls + '">' + c + '</div>' +
-        '<div class="vol">' + (v.vol_label||'') + '</div>' +
-        '<div class="tag ' + st + '">' + v.conclusion + near + '</div></div>';
-    }).join('');
-  }
-  async function doSnapshot() {
-    const snap = document.getElementById('snap');
-    snap.style.display = 'block';
-    snap.textContent = '生成中…';
-    try {
-      snap.textContent = await pywebview.api.snapshot();
-    } catch(e) { snap.textContent = '快照生成失败: ' + e; }
-  }
-  function openWeb() { pywebview.api.open_web(); }
-  window.addEventListener('pywebviewready', () => {
-    refresh();
-    setInterval(refresh, __REFRESH_MS__);
-  });
-</script>
-</body>
-</html>"""
+DEFAULT_PORT = 8765
+ASSETS_DIR = Path(__file__).resolve().parent / "assets"
+
+
+def _is_up(url: str, timeout: float = 1.2) -> bool:
+    import urllib.request
+
+    try:
+        with urllib.request.urlopen(url, timeout=timeout) as resp:
+            return resp.status == 200
+    except Exception:  # noqa: BLE001
+        return False
+
+
+def _ensure_web(port: int) -> None:
+    """确保 127.0.0.1:port 的 Web 服务在跑;不在则线程内拉起。"""
+    url = f"http://127.0.0.1:{port}/"
+    if _is_up(url):
+        return
+    from ..web.app import create_app
+
+    application = create_app()
+    threading.Thread(
+        target=lambda: application.run(host="127.0.0.1", port=port, debug=False, threaded=True),
+        daemon=True,
+    ).start()
+    deadline = time.time() + 20
+    while time.time() < deadline:
+        if _is_up(url):
+            return
+        time.sleep(0.3)
+    raise RuntimeError(f"Web 服务启动失败(端口 {port})")
+
+
+def _load_tray_icon():
+    """加载托盘图标;缺文件时用 Pillow 现画一个白芯黑框倒三角兜底。"""
+    from PIL import Image, ImageDraw
+
+    path = ASSETS_DIR / "tray_icon.png"
+    if path.exists():
+        return Image.open(path).convert("RGBA")
+    img = Image.new("RGBA", (64, 64), (0, 0, 0, 0))
+    d = ImageDraw.Draw(img)
+    d.polygon([(8, 10), (56, 10), (32, 56)], fill=(16, 18, 22, 255))
+    d.polygon([(16, 17), (48, 17), (32, 48)], fill=(255, 255, 255, 255))
+    return img
+
+
+def _round_window_corners(title: str = "TickerView", timeout: float = 12.0) -> None:
+    """不透明深色窗口 + Win11 DWM 圆角(平滑、抗锯齿、无白底)。
+
+    桌面级逐像素透明在这套 WebView2/WinForms 上合成不出(表单浅灰透不出桌面 = 白方底),
+    故改走不透明深色窗口:窗口底色与卡片同色(#101415),卡片铺满窗口,窗口由 DWM 裁圆角。
+    DWM 圆角上限约 8px 但平滑无毛躁;Win10 无此属性,静默跳过(退化为深色直角,仍无白底)。
+    """
+    import ctypes
+    from ctypes import wintypes
+
+    try:
+        user32 = ctypes.windll.user32
+        dwm = ctypes.windll.dwmapi
+    except Exception:  # noqa: BLE001
+        return
+    user32.FindWindowW.restype = wintypes.HWND
+    user32.FindWindowW.argtypes = [wintypes.LPCWSTR, wintypes.LPCWSTR]
+    dwm.DwmSetWindowAttribute.argtypes = [wintypes.HWND, ctypes.c_uint, ctypes.c_void_p, ctypes.c_uint]
+    deadline = time.time() + timeout
+    hwnd = 0
+    while time.time() < deadline and not hwnd:
+        hwnd = user32.FindWindowW(None, title)
+        if not hwnd:
+            time.sleep(0.15)
+    if not hwnd:
+        return
+    pref = ctypes.c_int(2)  # DWMWCP_ROUND
+    try:
+        dwm.DwmSetWindowAttribute(hwnd, 33, ctypes.byref(pref), ctypes.sizeof(pref))  # 33=CORNER_PREFERENCE
+    except Exception:  # noqa: BLE001
+        pass
+
+
+def _acquire_single_instance(name: str = "TickerView_SingleInstance_Mutex"):
+    """命名互斥量单实例锁。返回进程级持有的 HANDLE(勿关闭,进程退出自动释放);
+    已有实例在跑则返回 None。非 Windows / 创建失败时返回一个哨兵放行(不因锁问题挡启动)。
+    """
+    import ctypes
+    from ctypes import wintypes
+
+    try:
+        kernel32 = ctypes.windll.kernel32
+    except Exception:  # noqa: BLE001
+        return object()  # 非 Windows:放行
+    kernel32.CreateMutexW.restype = wintypes.HANDLE
+    kernel32.CreateMutexW.argtypes = [wintypes.LPVOID, wintypes.BOOL, wintypes.LPCWSTR]
+    kernel32.GetLastError.restype = wintypes.DWORD
+    ERROR_ALREADY_EXISTS = 183
+    h = kernel32.CreateMutexW(None, False, name)
+    if not h:
+        return object()  # 创建失败:放行
+    if kernel32.GetLastError() == ERROR_ALREADY_EXISTS:
+        kernel32.CloseHandle(wintypes.HANDLE(h))
+        return None      # 已有实例
+    return h
+
+
+class PanelController:
+    """窗口 + 托盘之间的协调者(被 js_api 与托盘菜单回调共用)。"""
+
+    def __init__(self, port: int, start_hidden: bool) -> None:
+        self._port = port
+        self._window = None
+        self._icon = None
+        self._start_hidden = start_hidden
+
+    def attach(self, window, icon) -> None:
+        self._window = window
+        self._icon = icon
+
+    def show(self) -> None:
+        if self._window is None:
+            return
+        try:
+            self._window.show()
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("显示面板失败: %s", exc)
+        self._wake()
+
+    def hide(self) -> None:
+        if self._window is not None:
+            try:
+                self._window.hide()
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("隐藏面板失败: %s", exc)
+
+    def set_size(self, width, height) -> None:
+        """把窗口贴合到"卡片 + 四周透明投影边"的尺寸(前端 ResizeObserver 调用)。"""
+        if self._window is None:
+            return
+        try:
+            self._window.resize(int(width), int(height))
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("调整面板尺寸失败: %s", exc)
+
+    def open_web(self) -> None:
+        threading.Thread(target=lambda: webbrowser.open(f"http://127.0.0.1:{self._port}/"),
+                         daemon=True).start()
+
+    def quit(self) -> None:
+        if self._icon is not None:
+            try:
+                self._icon.stop()
+            except Exception:  # noqa: BLE001
+                pass
+        if self._window is not None:
+            try:
+                self._window.destroy()
+            except Exception:  # noqa: BLE001
+                pass
+
+    def _wake(self) -> None:
+        """面板刚唤醒时补刷一次数据,抵消 WebView 隐藏期对定时器的节流。"""
+        if self._window is None:
+            return
+        try:
+            self._window.evaluate_js("window.__fpWake && window.__fpWake()")
+        except Exception:  # noqa: BLE001
+            pass
 
 
 class PanelAPI:
-    """js_api:pywebview 前端可调用的 Python 方法。"""
+    """js_api:pywebview 前端可调用的 Python 方法(最小桥)。"""
 
-    def __init__(self, model, cfg: Config) -> None:
-        self._model = model
-        self._cfg = cfg
+    def __init__(self, ctl: PanelController) -> None:
+        self._ctl = ctl
 
-    def refresh(self) -> dict:
-        from .live import check_live
+    def hide_to_tray(self) -> None:
+        self._ctl.hide()
 
-        try:
-            return check_live(self._model, self._cfg)
-        except Exception as exc:  # noqa: BLE001
-            logger.warning("悬浮面板刷新失败: %s", exc)
-            return {"gate": {"open": True, "j": None, "rule": "", "action": ""},
-                    "verdicts": [], "error": str(exc)}
-
-    def snapshot(self) -> str:
-        from .live import check_live
-        from .snapshot import build_snapshot
-
-        try:
-            r = check_live(self._model, self._cfg)
-            return build_snapshot(self._model, r, self._cfg)
-        except Exception as exc:  # noqa: BLE001
-            logger.warning("盘中快照生成失败: %s", exc)
-            return f"快照生成失败: {exc}"
+    def quit_app(self) -> None:
+        self._ctl.quit()
 
     def open_web(self) -> None:
-        import webbrowser
+        self._ctl.open_web()
 
-        port = int(__import__("os").environ.get("ALPHAPRISM_WEB_PORT", "8765"))
-        threading.Thread(target=lambda: webbrowser.open(f"http://127.0.0.1:{port}"),
-                         daemon=True).start()
+    def set_size(self, width, height) -> None:
+        self._ctl.set_size(width, height)
 
 
-def run_panel(cfg: Config | None = None) -> None:
-    """启动悬浮面板(pywebview 置顶窗)。阻塞直到窗口关闭。"""
+def _menu(ctl: PanelController):
+    import pystray
+    from pystray import Menu, MenuItem
+
+    return Menu(
+        MenuItem("显示面板", lambda i, g: ctl.show(), default=True),
+        MenuItem("隐藏面板", lambda i, g: ctl.hide()),
+        MenuItem("打开行情网页", lambda i, g: ctl.open_web()),
+        MenuItem("退出", lambda i, g: ctl.quit()),
+    )
+
+
+def run_panel(cfg=None) -> None:
+    """启动托盘宿主。阻塞直到窗口关闭(Alt+F4 / 托盘退出)。"""
     import webview
 
-    cfg = cfg or Config()
-    from .parser import parse_file as parse_battlemap
+    mutex = _acquire_single_instance()
+    if mutex is None:
+        print("已有 TickerView 实例在运行(见系统托盘),本次启动退出。")
+        return
 
-    from ..config import PROJECT_ROOT  # noqa: F401  (用于默认路径探测)
-    path = cfg.get("battlemap", "path", default="")
-    if not path:
-        import glob
+    port = int(os.environ.get("ALPHAPRISM_WEB_PORT", DEFAULT_PORT))
+    _ensure_web(port)
 
-        cands = sorted(glob.glob(r"E:\AITrader\七只ETF作战地图_*.md"), reverse=True)
-        if not cands:
-            print("未找到作战地图。用法: alphaprism panel [path]")
-            return
-        path = cands[0]
-    model = parse_battlemap(path)
-    api = PanelAPI(model, cfg)
+    from ..webprefs import load_prefs
+
+    start_hidden = bool(load_prefs().get("panel_start_hidden", False))
+
+    ctl = PanelController(port, start_hidden)
+    url = f"http://127.0.0.1:{port}/?float=1"
     try:
-        from ..webprefs import refresh_interval_sec
-
-        interval_ms = max(1000, int(refresh_interval_sec() * 1000))
-        html = PANEL_HTML.replace("__REFRESH_MS__", str(interval_ms))
         window = webview.create_window(
-            "AlphaPrism", html=html, js_api=api,
-            width=360, height=430, x=20, y=80,
+            "TickerView", url=url, js_api=PanelAPI(ctl),
+            width=380, height=460, x=20, y=80,
             frameless=True, easy_drag=True, on_top=True, resizable=False,
+            background_color="#101415", hidden=start_hidden,
         )
-        webview.start(debug=False)
     except Exception as exc:  # noqa: BLE001
         print(f"悬浮面板启动失败: {exc}")
         print("需要 Edge WebView2 运行时(Windows 10/11 自带)或 pywebview 支持的后端。")
         raise
+
+    import pystray
+
+    icon = pystray.Icon("TickerView", _load_tray_icon(), "TickerView", _menu(ctl))
+    ctl.attach(window, icon)
+    try:
+        icon.run_detached()  # pystray 用自己的线程,主线程留给 webview
+    except Exception:  # noqa: BLE001
+        threading.Thread(target=icon.run, daemon=True).start()
+
+    # 窗口出现后给不透明深色窗口加 DWM 圆角(后台轮询 HWND,不阻塞 GUI 线程)
+    threading.Thread(target=_round_window_corners, daemon=True).start()
+
+    try:
+        webview.start(debug=False)
+    finally:
+        try:
+            icon.stop()
+        except Exception:  # noqa: BLE001
+            pass
 
 
 if __name__ == "__main__":

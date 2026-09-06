@@ -566,7 +566,7 @@ def _default_battlemap_path() -> str:
 
 
 def cmd_panel(_args) -> int:
-    """悬浮面板(里程碑7):pywebview 置顶小窗(状态灯+结论词),复用 check_live。"""
+    """TickerView 托盘宿主:自动拉起 Web 服务 + pywebview 悬浮面板 + 系统托盘常驻。"""
     from alphaprism.planner.floatpanel import run_panel
 
     run_panel()
@@ -755,8 +755,8 @@ def main() -> int:
             pass
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
     parser = argparse.ArgumentParser(
-        prog="alphaprism",
-        description="AlphaPrism — A股中长线 AI 辅助交易系统(决策辅助,不自动交易)。",
+        prog="tickerview",
+        description="TickerView — A股中长线 AI 辅助交易系统(决策辅助,不自动交易)。",
     )
     sub = parser.add_subparsers(dest="command", metavar="<command>")
 

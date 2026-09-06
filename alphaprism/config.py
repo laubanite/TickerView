@@ -10,11 +10,9 @@ from typing import Any
 
 import yaml
 
-PROJECT_ROOT = Path(__file__).resolve().parent.parent
-CONFIG_DIR = PROJECT_ROOT / "config"
-DEFAULT_CONFIG = CONFIG_DIR / "settings.yaml"
-LOCAL_CONFIG = CONFIG_DIR / "settings.local.yaml"
-WATCHLIST_FILE = CONFIG_DIR / "watchlist.yaml"
+from .paths import CONFIG_DIR, DEFAULT_CONFIG, LOCAL_CONFIG, WATCHLIST_FILE
+
+PROJECT_ROOT = Path(__file__).resolve().parent.parent  # repo 根(autostart 开发态定位 cli 用)
 
 
 def _deep_merge(base: dict, override: dict) -> dict:

@@ -15,12 +15,13 @@ from pathlib import Path
 
 import yaml
 
-from .config import CONFIG_DIR
+from .paths import USER_CONFIG_DIR
 
-PREFS_FILE = CONFIG_DIR / "web.yaml"
+PREFS_FILE = USER_CONFIG_DIR / "web.yaml"
 
 DEFAULTS: dict = {
     "refresh_interval_sec": 12,  # 顶部指数 + 候选股池自动轮询间隔(秒)
+    "panel_start_hidden": False,  # 托盘面板:启动即藏入系统托盘(True=只见托盘,False=显示面板)
 }
 
 # 允许被前端写入的键(白名单,防止 Web 端误写其它配置)

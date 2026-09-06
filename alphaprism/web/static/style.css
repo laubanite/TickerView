@@ -306,6 +306,8 @@ select.ctl{cursor:pointer}
 .fld{display:flex;flex-direction:column;gap:6px;min-width:0}
 .fld>label{font-size:12px;color:var(--dim);font-weight:500}
 .fld .hint{font-size:11px;color:#6a7274;font-weight:400}
+/* 复选框行:横排,框在文字左、垂直居中(修正 .fld 默认竖排导致的错位) */
+.fld:has(>input[type=checkbox]){flex-direction:row;align-items:center;gap:8px}
 .form-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(132px,1fr));gap:10px 12px}
 .form-grid .fld{min-width:0}
 .seg{display:inline-flex;gap:2px;background:var(--ctl);border:1px solid var(--line);
@@ -530,3 +532,15 @@ select.ctl{cursor:pointer}
 .pm-bad{background:#1c1012;border:1px solid #3d1a22;color:#ff9aa5}    /* 利空·高危=红(警示) */
 .pm-warn{background:#1a1610;border:1px solid #5b4a1f;color:#e5c07b}   /* 利空·中度=琥珀 */
 .pm-good{background:#0e1a14;border:1px solid #1a3328;color:#7fd6c0}   /* 利好=绿(机会) */
+
+/* ===== 浮窗模式(?float=1,pywebview 桌面分身) =====
+   桌面级逐像素透明在这套 WebView2/WinForms 上合成不出(表单浅灰透不出桌面 = 白方底),
+   故用不透明深色窗口:body 与卡片同色(#101415)、卡片铺满窗口、窗口由宿主 DWM 裁圆角(Win11)。
+   卡片内部样式(圆角/边框/毛玻璃/宽高)仍完全沿用上面 .float 原样式,一字不改。 */
+body.float-mode{background:#101415;overflow:hidden;height:100vh}
+body.float-mode #app>*:not(.float){display:none!important}
+/* 卡片铺满窗口(窗口底色与卡片同色,无白/灰底);圆角沿用原 .float 的 14px,窗口由 DWM 裁圆 */
+body.float-mode .float{right:0;bottom:0}
+.float .f-x{flex:none;margin-left:6px;width:20px;height:20px;line-height:18px;text-align:center;border-radius:4px;
+  background:transparent;border:none;color:var(--dim);cursor:pointer;font-size:12px}
+.float .f-x:hover{color:#fff;background:rgba(255,255,255,.08)}
