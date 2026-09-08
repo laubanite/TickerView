@@ -47,7 +47,7 @@ def _get(url: str, params: dict) -> dict:
     apply_network_policy(True)  # 强制直连(本机有指向死代理的环境变量)
     key = str(Config().get("fuyao", "api_key", default="") or "").strip()
     if not key:
-        raise FuyaoError("缺少同花顺 API key(config/settings.local.yaml fuyao.api_key)")
+        raise FuyaoError("缺少同花顺 API Key(在 设置-模型-数据源密钥 中配置)")
     resp = requests.get(url, params=params,
                         headers={"X-api-key": key, "User-Agent": "Mozilla/5.0"}, timeout=15)
     resp.raise_for_status()

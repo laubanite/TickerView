@@ -70,7 +70,11 @@ def _build_context(cfg, conn) -> dict:
     conn.commit()  # fetch_log 落库(connect 默认非自动提交)
     items = feed["items"]
     news_hits = news_mod.filter_by_keywords(items, kws)
-    cat = fuyao.catalyst_context(cfg)  # 最近交易日异动/热榜
+    try:
+        cat = fuyao.catalyst_context(cfg)  # 最近交易日异动/热榜
+    except Exception as exc:  # noqa: BLE001  无同花顺key/网络失败→板块异动降级为空,盘前仍出"消息+状态灯"
+        logger.warning("催化剂上下文获取失败(板块异动降级为空,不影响盘前): %s", exc)
+        cat = {"sectors": [], "anomalies": [], "hot": []}
 
     sectors = []
     for s in cat["sectors"]:
@@ -192,7 +196,7 @@ def _llm_important_news(feed: list[dict], sector_hits: dict[str, list[dict]],
                  '"source":"新浪|东财","source_grade":"官方|媒体|快讯|传闻","confidence":"高|中|低","reason":"..."}]}')
     prompt = "\n".join(lines)
     try:
-        text = chat([{"role": "user", "content": prompt}], cfg=cfg, temperature=0.2, max_tokens=1200)
+        text = chat([{"role": "user", "content": prompt}], cfg=cfg, temperature=0.2, max_tokens=2600)
         if not text:
             return {}
         start, end = text.find("{"), text.rfind("}")
@@ -252,8 +256,15 @@ def _llm_important_news(feed: list[dict], sector_hits: dict[str, list[dict]],
         return {}
 
 
-def _rule_important_news(sector_hits: dict[str, list[dict]], sector_names: list[str]) -> dict:
-    """LLM 不可用的降级:每板块取最近 1-2 条命中原文,影响标中性、低置信(不编造判断)。"""
+def _rule_important_news(sector_hits: dict[str, list[dict]], sector_names: list[str],
+                         feed: list[dict] | None = None,
+                         llm_reason: str = "AI 调用失败") -> dict:
+    """LLM 不可用时的降级,两档兜底(不编造判断,但也不把用户晾在空态):
+
+    ① 板块关键词命中:每板块取最近 1-2 条命中原文(影响标中性、低置信);
+    ② 全无命中:展示各数据源最近的原始快讯(标注"未经 AI 筛选"),让盘前仍有信息量——
+       数据源本身是可用的(新浪+东财各 50 条),失败的是 AI 筛选这一步,不该让用户看到"没有新闻"。
+    """
     items: list[dict] = []
     for sector in sector_names:
         for it in (sector_hits.get(sector) or [])[:2]:
@@ -267,13 +278,42 @@ def _rule_important_news(sector_hits: dict[str, list[dict]], sector_names: list[
                 "source_grade": "快讯",
                 "confidence": "低",
                 "cross": it.get("cross", 1),
-                "reason": "板块关键词命中(LLM 未启用,人工判断)",
+                "reason": "板块关键词命中(AI 筛选未成功,人工判断)",
             })
-    if not items:
-        items.append({"time": "", "text": "暂无板块相关重要新闻", "impact": "中性",
+    if not items and feed:
+        # 兜底:原始快讯最近 8 条(按时间倒序,去掉跨源重复)
+        seen: set[str] = set()
+        raw = []
+        for it in sorted(feed, key=lambda x: str(x.get("time") or ""), reverse=True):
+            t = (it.get("text") or "").strip()[:20]
+            if not t or t in seen:
+                continue
+            seen.add(t)
+            raw.append({
+                "time": (it.get("time") or "")[5:16][:5],
+                "text": (it.get("text") or "").strip(),   # 反截断:原文全量
+                "impact": "中性",
+                "type": "其他",
+                "sector": "其他",
+                "source": "新浪" if it.get("tag") else "东财",
+                "source_grade": "快讯",
+                "confidence": "低",
+                "cross": it.get("cross", 1),
+                "reason": "原始快讯(未经 AI 筛选,重要度请自行判断)",
+            })
+            if len(raw) >= 8:
+                break
+        items = raw
+        summary = f"AI 筛选未成功,展示最近原始快讯({len(items)} 条)"
+    elif items:
+        summary = f"AI 筛选未成功,按板块关键词命中展示({len(items)} 条)"
+    else:
+        # 数据源真的一条都没有(断网/全部失败)才走这里
+        items.append({"time": "", "text": "数据源本轮未取到快讯", "impact": "中性",
                       "type": "其他", "sector": "其他", "source_grade": "快讯",
-                      "confidence": "低", "cross": 1, "reason": "新浪7x24 关键词无命中"})
-    return {"summary": f"共 {len(items)} 条板块相关新闻(降级:LLM 未启用)", "items": items}
+                      "confidence": "低", "cross": 1, "reason": "新闻源抓取为空"})
+        summary = "数据源本轮未取到快讯"
+    return {"summary": summary, "items": items}
 
 
 def _sector_perf(conn, sector_syms: dict[str, str]) -> dict[str, str]:
@@ -416,7 +456,7 @@ def run_morning(cfg: Config | None = None, push: bool = True) -> str | None:
             important = _llm_important_news(ctx["feed"], sector_hits, sector_names, cfg,
                                             prior=prior_prompt(conn), sector_perf=perf)
             if not important.get("items"):
-                important = _rule_important_news(sector_hits, sector_names)
+                important = _rule_important_news(sector_hits, sector_names, feed=ctx["feed"])
         summary, watch = "", []
         judge = _llm_judge(sectors, prev, cfg)
         if judge:

@@ -1,4 +1,4 @@
-/* TickerView 行情页 · StableVault 暗色交易所风格 */
+﻿/* TickerView 行情页 · StableVault 暗色交易所风格 */
 :root{
   --bg:#070a0b; --panel:#131718; --panel2:#101415; --line:#232a2d;
   --text:#d4d7da; --dim:#8a9299; --red:#f23645; --green:#089981;
@@ -28,7 +28,7 @@ body{background:var(--bg);color:var(--text);font-family:"Microsoft YaHei",-apple
 /* ===== header ===== */
 header{display:flex;align-items:center;gap:16px;padding:10px 18px;background:#0b0e0f;border-bottom:1px solid var(--line);position:sticky;top:0;z-index:50}
 .logo{font-weight:700;font-size:15px;color:#fff;letter-spacing:1px}
-.logo span{color:var(--accent)}
+.logo span{color:#fff}
 nav{display:flex;gap:4px;flex:1}
 nav button{background:none;border:1px solid transparent;color:var(--dim);padding:6px 16px;border-radius:var(--r-sm);cursor:pointer;font-size:13px;transition:all .15s}
 nav button:hover{color:#fff;background:#151a1b}
@@ -68,8 +68,18 @@ tbody tr{cursor:default;transition:background .12s}
 tbody tr.selectable{cursor:pointer}
 tbody tr.selectable:hover{background:#181d1e}
 tbody tr.sel{background:#1a2424}
-td .px{font-weight:600}
-td .nm{color:#fff}
+td.px{font-weight:600;text-align:right;font-variant-numeric:tabular-nums}
+td.nm{color:#fff}
+/* 数字列表头跟随数据右对齐(现价/涨跌/换手三列):表头与数字同一条竖直线,
+   否则表头左对齐+数据右对齐,列宽被撑开时两者视觉脱节 */
+th.r{text-align:right}
+/* 数字列等宽(tabular-nums):价格/涨跌等右对齐数字在比例字宽下仍会参差 */
+.num{font-variant-numeric:tabular-nums}
+/* 自选表列宽锁定:fixed 布局下 th 的 width(百分比)才真正生效——
+   auto 布局会把剩余宽度全塞给某一列。三数字列共 40%:现价15% 涨跌13% 换手12%,
+   标的列吃剩余 ~60%,长名称截断省略,数字列不再被挤到最右缘 */
+table.wl{table-layout:fixed}
+table.wl td{overflow:hidden;text-overflow:ellipsis}
 
 /* ===== chart ===== */
 .chart-head{display:flex;align-items:center;gap:8px;margin-bottom:10px}
@@ -234,7 +244,7 @@ table.mk textarea:focus{outline:none;border-color:var(--accent);box-shadow:var(-
 .shot table.mk{font-size:11px}
 .shot table.mk th,.shot table.mk td{padding:3px 6px}
 
-/* ===== 全宽视图(作战地图/回测) ===== */
+/* ===== 全宽视图(已随 v3.3 下线,保留基础样式供后续复用) ===== */
 .fullview{display:none;padding:14px 18px}
 .fullview.on{display:block}
 .mv-head h3{font-size:16px;color:#fff;margin-bottom:4px}
@@ -330,6 +340,7 @@ select.ctl{cursor:pointer}
 .ok-line{color:var(--green);font-size:11px;margin-top:4px}
 .btn.mini.del:hover{color:var(--red)}
 .model-list{display:flex;flex-direction:column;gap:8px}
+.llm-fold-row{display:flex;justify-content:center;margin-top:8px}
 .model-item{background:var(--card);border:1px solid var(--line);border-radius:var(--r);
   padding:12px 14px;transition:border-color .15s,background .15s,box-shadow .15s}
 .model-item:hover{border-color:#2f373a}
@@ -393,7 +404,9 @@ select.ctl{cursor:pointer}
 .kc-left{display:flex;align-items:center;gap:9px;min-width:0;flex:1.25}
 .kc-name{flex:none;font-weight:600;color:#fff;font-size:12px;min-width:86px}
 .kc-left .eye-btn{width:30px;height:30px}
-.key-cards .pw-wrap{flex:1}
+/* 密钥卡输入框定宽(不再被 key 名称长度挤压变形);删除按钮跟在小眼睛后,hover 红 */
+.key-cards .pw-wrap{flex:none;width:320px}
+.eye-btn.del-key:hover{color:var(--red);background:#231417}
 .set-footnote{font-size:11px;color:#6a7274;line-height:1.7;margin-top:12px;padding-top:10px;
   border-top:1px dashed #232a2d}
 .adv-body{display:flex;flex-direction:column;gap:9px;margin-top:2px}
@@ -431,11 +444,11 @@ select.ctl{cursor:pointer}
 .frow.dim-row{opacity:.45}
 .frow .f-hold{width:24px;flex:none;display:flex;align-items:center;justify-content:flex-start}
 .frow .nm{width:68px;flex:none;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-.frow .px{width:48px;flex:none;text-align:right;font-weight:700}
-.frow .chg{width:48px;flex:none;text-align:right;white-space:nowrap}
-.frow .turn{width:40px;flex:none;text-align:right;color:var(--dim);white-space:nowrap}
-.frow .vol{width:42px;flex:none;text-align:right;color:var(--dim);white-space:nowrap}
-.frow .amt{width:46px;flex:none;text-align:right;color:var(--dim);white-space:nowrap}
+.frow .px{width:58px;flex:none;text-align:right;font-weight:700;white-space:nowrap;font-variant-numeric:tabular-nums}
+.frow .chg{width:48px;flex:none;text-align:right;white-space:nowrap;font-variant-numeric:tabular-nums}
+.frow .turn{width:40px;flex:none;text-align:right;color:var(--dim);white-space:nowrap;font-variant-numeric:tabular-nums}
+.frow .vol{width:42px;flex:none;text-align:right;color:var(--dim);white-space:nowrap;font-variant-numeric:tabular-nums}
+.frow .amt{width:46px;flex:none;text-align:right;color:var(--dim);white-space:nowrap;font-variant-numeric:tabular-nums}
 .frow .mkcell{flex:1;min-width:0;text-align:right;display:flex;justify-content:flex-end;align-items:center;gap:4px}
 .concl{font-weight:700;font-size:11px;letter-spacing:.3px;white-space:nowrap;
   overflow:hidden;text-overflow:ellipsis;max-width:100%}

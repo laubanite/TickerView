@@ -16,9 +16,16 @@ PROJECT_ROOT = Path(__file__).resolve().parent.parent  # repo 根(autostart 开�
 
 
 def _deep_merge(base: dict, override: dict) -> dict:
-    """递归合并:override 的值覆盖 base;dict 值逐层合并。"""
+    """递归合并:override 的值覆盖 base;dict 值逐层合并。
+
+    值为 None = 删除该键(仅 save_local_config 的删除语义会显式构造 None;
+    yaml 里手写 null 同样触发——settings.local.yaml 置 null 可清掉主配置对应键)。
+    """
     out = dict(base)
     for key, value in override.items():
+        if value is None:
+            out.pop(key, None)          # 显式删除
+            continue
         if isinstance(value, dict) and isinstance(out.get(key), dict):
             out[key] = _deep_merge(out[key], value)
         else:

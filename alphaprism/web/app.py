@@ -1,12 +1,11 @@
-"""Web 行情页后端(Flask,里程碑6)。
+﻿"""Web 行情页后端(Flask,里程碑6)。
 
 复用现有 Python 引擎,通过 REST API 供 Vue 前端调用:
 - /api/indices      指数实时(上证/科创/深成/创业板)
 - /api/watchlist    自选股:实时行情 + 核对引擎状态灯
 - /api/quote        单只实时行情
 - /api/kline        K线(日K/30分/分时)
-- /api/battlemap    作战地图 RuleModel
-- /api/backtest     作战地图回测
+- /api/morning      盘前市场状态灯 + 隔夜消息
 """
 from __future__ import annotations
 
@@ -19,8 +18,6 @@ from pathlib import Path
 from flask import Flask, jsonify, request, send_from_directory
 
 from ..config import Config
-from ..planner.parser import parse_file as parse_battlemap
-from ..backtest_map import run_map_backtest
 from ..fetchers import fuyao
 from ..fetchers.etf_kline import fetch_30m, fetch_daily, fetch_name
 from ..fetchers.stock_qt import fetch_stock_snapshot
@@ -131,6 +128,11 @@ def _ensure_verify_klines(conn) -> None:
 _SNAP_CACHE: dict[str, tuple[float, dict]] = {}
 SNAP_TTL_SEC = 30.0
 
+# 悬浮面板标记缓存(ETF + 个股统一):facts 接口每次刷新即写入(与返回的 panel 同源)。
+# 跨窗口同步的真源:网页看板/浮窗各自拉取(BroadcastChannel 无法跨 WebView 边界),
+# 浮窗轮询 /api/snapshot/panel 即可拿到网页端刚刷出的标记。
+_PANEL_CACHE: dict[str, dict] = {}   # code -> {panel, time, mode}
+
 # 个股名称缓存(验证日历兜底用;进程生命周期内有效,qt 一次拉取)
 _stock_name_cache: dict[str, str | None] = {}
 
@@ -191,6 +193,14 @@ def create_app() -> Flask:
     ensure_user_dirs()  # 冻结态首启建 %APPDATA%\TickerView 并播种出厂 watchlist
     app = Flask(__name__, static_folder=str(WEB_DIR / "static"), static_url_path="/static")
     cfg = Config()
+
+    @app.after_request
+    def _no_cache_static(resp):
+        """静态资源禁缓存:本地应用无 CDN,改版后浏览器/WebView 拿旧 JS 会出现
+        "页面行为与源码对不上"的幽灵 bug(用户怎么试都是老问题,硬刷新才好)。"""
+        if request.path.startswith("/static") or request.path == "/":
+            resp.headers["Cache-Control"] = "no-cache, max-age=0"
+        return resp
 
     # ------------------------------------------------------------ 静态首页
     @app.route("/")
@@ -326,27 +336,21 @@ def create_app() -> Flask:
             return jsonify({"ok": False, "error": str(exc)}), 502
 
     # ------------------------------------------------------------ 盘中快照(§5.4)
-    @app.route("/api/snapshot")
-    def api_snapshot():
-        path = _battlemap_path(cfg)
-        if not path:
-            return jsonify({"ok": False, "error": "未找到作战地图"}), 404
-        try:
-            from ..planner.live import check_live
-            from ..planner.snapshot import build_snapshot
-
-            model = parse_battlemap(path)
-            r = check_live(model)
-            md = build_snapshot(model, r, cfg)
-            return jsonify({"ok": True, "markdown": md,
-                            "gate": r.get("gate"), "verdicts": r.get("verdicts")})
-        except Exception as exc:  # noqa: BLE001
-            logger.warning("盘中快照失败: %s", exc)
-            return jsonify({"ok": False, "error": str(exc)}), 502
-
-    # ------------------------------------------------------------ 盘中技术快照(2026-08-22,与作战地图解耦)
+    # ------------------------------------------------------------ 盘中技术快照(2026-08-22)
     # 两张卡完全独立:数据快照(确定性,不经过 LLM) / 深入分析(LLM,失败降级)。
     # LLM 失败/幻觉不影响数据快照卡。
+    @app.route("/api/snapshot/panel")
+    def api_snapshot_panel():
+        """悬浮面板标记批量查询(跨窗口同步真源,2026-09-07)。
+
+        返回本进程内最近一次「刷新快照」生成的所有标记(ETF+个股统一,与 facts 返回的
+        panel 字段完全同源)。浮窗轮询时调用——BroadcastChannel 只能覆盖同一浏览器
+        上下文(双网页标签页),跨 WebView(浏览器↔pywebview 浮窗)必须走本接口。
+        """
+        out = {code: {"panel": v["panel"], "time": v["time"], "mode": v["mode"]}
+               for code, v in _PANEL_CACHE.items()}
+        return jsonify({"ok": True, "markers": out})
+
     @app.route("/api/snapshot/tech/facts")
     def api_snapshot_tech_facts():
         code = request.args.get("code", "")
@@ -371,6 +375,12 @@ def create_app() -> Flask:
                     "trigger": {}, "invalidation": {},
                 }
                 archive_stock_risk(code, adv)
+                # 面板标记缓存:与返回给调用方的 panel 同源(跨窗口同步真源)
+                _PANEL_CACHE[code] = {
+                    "panel": adv.get("panel", {}),
+                    "time": adv["facts"].get("now", ""),
+                    "mode": "stock",
+                }
                 return jsonify({"ok": True, "markdown": adv["markdown"],
                                 "panel": adv.get("panel", {}), "signal": signal,
                                 "data_at": adv["facts"].get("now", ""),
@@ -381,6 +391,12 @@ def create_app() -> Flask:
         try:
             facts, md, adv = _deterministic_snapshot(code, cfg)
             panel = _panel_payload_from(code, adv)
+            # 面板标记缓存:与返回给调用方的 panel 同源(跨窗口同步真源)
+            _PANEL_CACHE[code] = {
+                "panel": panel,
+                "time": facts.get("now", ""),
+                "mode": "etf",
+            }
             signal = {
                 "one_sentence": adv["one_sentence"],
                 "signal_type": adv["signal_type"],
@@ -486,6 +502,11 @@ def create_app() -> Flask:
                     qty = int(data.get("quantity") or 0)
                 except (TypeError, ValueError):
                     return jsonify({"ok": False, "error": "cost/quantity 需为数字"}), 400
+                if qty <= 0 or cost <= 0:
+                    return jsonify({"ok": False, "error": "成本与数量需为正数"}), 400
+                if qty % 100 != 0:
+                    return jsonify({"ok": False, "error":
+                                    f"股数需为 100 的整数倍(A股最小交易单位,当前 {qty})"}), 400
                 name = str(data.get("name") or fetch_name(sym) or sym)
                 status = str(data.get("status") or "持仓")
                 conn = connect()
@@ -693,6 +714,15 @@ def create_app() -> Flask:
                 if not key:
                     continue
                 patch["llm"][f"{str(provider).strip()}_key"] = key
+        # 删除 key(clear_keys):值为 None → _deep_merge 显式删除该键,settings.local.yaml
+        # 里彻底消失(不留 `custom_key: ''` 残行);该 provider 的密钥卡片随之消失。
+        if data.get("clear_keys"):
+            if not isinstance(data["clear_keys"], list):
+                return jsonify({"ok": False, "error": "clear_keys 需为列表"}), 400
+            for provider in data["clear_keys"]:
+                provider = str(provider or "").strip()
+                if provider:
+                    patch["llm"][f"{provider}_key"] = None
         if not patch["llm"]:
             return jsonify({"ok": False, "error": "没有可保存的内容"}), 400
         try:
@@ -702,6 +732,61 @@ def create_app() -> Flask:
             logger.warning("LLM 配置保存失败: %s", exc)
             return jsonify({"ok": False, "error": f"保存失败: {exc}"}), 502
         return jsonify({"ok": True, "message": "已保存并生效"})
+
+    # ------------------------------------------------------------ 设置:数据源密钥(同花顺等行情数据源)
+    @app.route("/api/datasource", methods=["GET", "POST"])
+    def api_datasource():
+        """数据源 API Key 配置(设置-模型面板「数据源密钥」小节)。
+
+        GET:返回各数据源 key 状态(脱敏);POST:保存非空 key 到 settings.local.yaml 并立即生效。
+        key 留空 = 不修改(保留原值);clear:[source,...] = 彻底删除该数据源的 key。
+        """
+        from ..config import save_local_config
+
+        sources = ("fuyao",)   # 数据源清单:目前仅同花顺(行情/异动/热榜)
+        try:
+            if request.method == "POST":
+                data = request.get_json(force=True) or {}
+                patch: dict = {}
+                for src in sources:
+                    key = str(data.get(src) or "").strip()
+                    if key:
+                        patch[src] = {"api_key": key}
+                # 删除:patch 里 {"api_key": None} → _deep_merge 的 None 删除语义,彻底移除
+                clears = data.get("clear") or []
+                if not isinstance(clears, list):
+                    return jsonify({"ok": False, "error": "clear 需为列表"}), 400
+                for src in clears:
+                    src = str(src or "").strip()
+                    if src in sources:
+                        patch[src] = {"api_key": None}
+                if not patch:
+                    return jsonify({"ok": False, "error": "没有可保存的内容(留空不修改)"}), 400
+                try:
+                    save_local_config(patch)
+                    cfg.reload()
+                except Exception as exc:  # noqa: BLE001
+                    logger.warning("数据源密钥保存失败: %s", exc)
+                    return jsonify({"ok": False, "error": f"保存失败: {exc}"}), 502
+                return jsonify({"ok": True, "message": "已保存并生效"})
+            out = []
+            for src in sources:
+                v = str(cfg.get(src, "api_key", default="") or "").strip()
+                out.append({"source": src, "set": bool(v), "masked": _mask_key(v) if v else ""})
+            return jsonify({"ok": True, "sources": out})
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("数据源密钥操作失败: %s", exc)
+            return jsonify({"ok": False, "error": str(exc)}), 502
+
+    @app.route("/api/datasource/peek", methods=["POST"])
+    def api_datasource_peek():
+        """查看单个数据源明文 API Key(设置弹窗眼睛图标,前端已弹安全警告后调用)。"""
+        data = request.get_json(force=True) or {}
+        src = str(data.get("source", "")).strip()
+        key = str(cfg.get(src, "api_key", default="") or "").strip()
+        if not key:
+            return jsonify({"ok": False, "error": f"{src} 未配置 API Key"}), 404
+        return jsonify({"ok": True, "source": src, "key": key})
 
     @app.route("/api/llm/test", methods=["POST"])
     def api_llm_test():
@@ -803,35 +888,17 @@ def create_app() -> Flask:
             logger.warning("K线失败 %s/%s: %s", sym, period, exc)
             return jsonify({"ok": False, "error": str(exc)}), 502
 
-    # ------------------------------------------------------------ 作战地图
-    @app.route("/api/battlemap")
-    def api_battlemap():
-        path = _battlemap_path(cfg)
-        if not path:
-            return jsonify({"ok": False, "error": "未找到作战地图"}), 404
-        try:
-            model = parse_battlemap(path)
-            return jsonify({"ok": True, "model": model.to_dict(),
-                            "summary": model.summary()})
-        except Exception as exc:  # noqa: BLE001
-            logger.warning("作战地图解析失败: %s", exc)
-            return jsonify({"ok": False, "error": str(exc)}), 502
-
-    # ------------------------------------------------------------ 盘前视图(实时新闻+LLM,三块联动)
+    # ------------------------------------------------------------ 盘前视图(市场状态灯 + 隔夜消息)
     @app.route("/api/morning")
     def api_morning():
-        path = _battlemap_path(cfg)
-        if not path:
-            return jsonify({"ok": False, "error": "未找到作战地图"}), 404
         try:
-            from ..planner.playbook import build_morning_view
+            from ..morning_view import build_morning_view
 
-            model = parse_battlemap(path)
-            view = build_morning_view(model, cfg)
+            view = build_morning_view(cfg)
             return jsonify({"ok": True, **view})
         except Exception as exc:  # noqa: BLE001
             logger.warning("盘前视图失败: %s", exc)
-            return jsonify({"ok": False, "error": str(exc)}), 502
+            return jsonify({"ok": False, "error": "盘前视图生成失败,请稍后重试"}), 502
 
     # ------------------------------------------------------------ 信息层评估(方案 M5/M6)
     @app.route("/api/news/stats")
@@ -851,65 +918,6 @@ def create_app() -> Flask:
             })
         finally:
             conn.close()
-
-    # ------------------------------------------------------------ 盘前生成(里程碑2)
-    @app.route("/api/playbook", methods=["GET", "POST"])
-    def api_playbook():
-        path = _battlemap_path(cfg)
-        if not path:
-            return jsonify({"ok": False, "error": "未找到作战地图"}), 404
-        try:
-            from ..planner.playbook import append_to_journal as pb_append
-            from ..planner.playbook import build_draft, format_draft
-
-            model = parse_battlemap(path)
-            if request.method == "POST":
-                data = request.get_json(force=True) or {}
-                draft = {"date": "", "summary": data.get("summary", ""),
-                         "rows": data.get("rows", [])}
-                md = format_draft(draft, model)
-                pb_append(md, path)
-                return jsonify({"ok": True, "markdown": md})
-            draft = build_draft(model)
-            md = format_draft(draft, model)
-            return jsonify({"ok": True, "markdown": md,
-                            "summary": draft.get("summary", ""),
-                            "rows": draft.get("rows", [])})
-        except Exception as exc:  # noqa: BLE001
-            logger.warning("盘前生成失败: %s", exc)
-            return jsonify({"ok": False, "error": str(exc)}), 502
-
-    # ------------------------------------------------------------ 盘中核对(里程碑3)
-    @app.route("/api/check")
-    def api_check():
-        path = _battlemap_path(cfg)
-        if not path:
-            return jsonify({"ok": False, "error": "未找到作战地图"}), 404
-        try:
-            from ..planner.live import check_live
-
-            model = parse_battlemap(path)
-            r = check_live(model)
-            return jsonify({"ok": True, **r})
-        except Exception as exc:  # noqa: BLE001
-            logger.warning("盘中核对失败: %s", exc)
-            return jsonify({"ok": False, "error": str(exc)}), 502
-
-    # ------------------------------------------------------------ 盘后生成(里程碑4)
-    @app.route("/api/close")
-    def api_close():
-        path = _battlemap_path(cfg)
-        if not path:
-            return jsonify({"ok": False, "error": "未找到作战地图"}), 404
-        try:
-            from ..planner.close import build_close_review
-
-            model = parse_battlemap(path)
-            md = build_close_review(model)
-            return jsonify({"ok": True, "markdown": md})
-        except Exception as exc:  # noqa: BLE001
-            logger.warning("盘后生成失败: %s", exc)
-            return jsonify({"ok": False, "error": str(exc)}), 502
 
     # ------------------------------------------------------------ 盘后建议验证(增量4 MVP:懒验证 + 日历)
     @app.route("/api/verify/calendar")
@@ -1028,40 +1036,7 @@ def create_app() -> Flask:
             logger.warning("验证日历失败: %s", exc)
             return jsonify({"ok": False, "error": str(exc)}), 502
 
-    # ------------------------------------------------------------ 回测
-    @app.route("/api/backtest")
-    def api_backtest():
-        path = _battlemap_path(cfg)
-        if not path:
-            return jsonify({"ok": False, "error": "未找到作战地图"}), 404
-        start = request.args.get("start", "2025-08-01")
-        end = request.args.get("end", "2026-08-01")
-        try:
-            capital = float(request.args.get("capital", 17300))
-        except ValueError:
-            capital = 17300.0
-        try:
-            model = parse_battlemap(path)
-            r = run_map_backtest(model, start, end, capital)
-            if "error" in r:
-                return jsonify({"ok": False, "error": r["error"]}), 400
-            return jsonify({"ok": True, "result": r})
-        except Exception as exc:  # noqa: BLE001
-            logger.warning("回测失败: %s", exc)
-            return jsonify({"ok": False, "error": str(exc)}), 502
-
     return app
-
-
-def _battlemap_path(cfg: Config) -> str:
-    """作战地图路径:config 配置或 AITrader 最新一份。"""
-    p = cfg.get("battlemap", "path", default="")
-    if p:
-        return p
-    import glob
-
-    cands = sorted(glob.glob(r"E:\AITrader\七只ETF作战地图_*.md"), reverse=True)
-    return cands[0] if cands else ""
 
 
 DEFAULT_PORT = 8765   # 冷门端口,避开 5000 等常用默认端口
