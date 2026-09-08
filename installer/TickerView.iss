@@ -6,8 +6,8 @@
 
 [Setup]
 AppName=TickerView
-AppVersion=0.2.0
-AppVerName=TickerView 0.2.0
+AppVersion=0.1.0
+AppVerName=TickerView 0.1.0
 AppPublisher=TickerView
 DefaultDirName={localappdata}\Programs\TickerView
 DefaultGroupName=TickerView
@@ -15,12 +15,12 @@ DisableProgramGroupPage=yes
 ; 当前用户安装,免 UAC
 PrivilegesRequired=lowest
 PrivilegesRequiredOverridesAllowed=dialog
-; 64 位(x64 兼容所有 Inno 6)
-ArchitecturesInstallIn64BitMode=x64
-ArchitecturesAllowed=x64
+; 64 位(x64compatible 兼容所有 Inno 6)
+ArchitecturesInstallIn64BitMode=x64compatible
+ArchitecturesAllowed=x64compatible
 ; 输出(相对 installer\ → installer\Output)
 OutputDir=Output
-OutputBaseFilename=TickerView-Setup-0.2.0
+OutputBaseFilename=TickerView-Setup-0.1.0
 SetupIconFile=..\alphaprism\planner\assets\tray_icon.ico
 UninstallDisplayIcon={app}\TickerView.exe
 UninstallDisplayName=TickerView

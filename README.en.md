@@ -95,7 +95,7 @@ All from public data sources; the tool **connects to no trading account and plac
 
 ## 📦 Install (end users)
 
-1. Go to **[Releases](../../releases)** and download `TickerView-Setup-0.2.0.exe`
+1. Go to **[Releases](../../releases)** and download `TickerView-Setup-0.1.0.exe`
 2. Double-click to install — **per-user, no administrator rights required**; defaults to `%LOCALAPPDATA%\Programs\TickerView` (you can change it, e.g. to D:)
 3. A "TickerView" entry appears in the Start menu / desktop; the app lives in the **system tray**
 
@@ -107,7 +107,7 @@ All from public data sources; the tool **connects to no trading account and plac
 This project is not code-signed (paid certificate), so the first run may show "Windows protected your PC / unknown publisher". Click **More info → Run anyway**.
 </details>
 
-**Portable**: download `TickerView-portable.zip`, unzip and run `TickerView.exe` (no registry writes, no uninstall entry).
+**Portable**: planned (please use the installer for now).
 
 **Where your data lives**: config and database are stored under `%APPDATA%\TickerView\` (`config\` + `data\alphaprism.db`). **Uninstalling keeps your data**; reinstalling picks it right up. A fresh install starts with an empty watchlist — add your own symbols.
 
