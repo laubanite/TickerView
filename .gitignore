@@ -57,3 +57,7 @@ backups/
 alphaprism/planner/assets/tray_*
 !alphaprism/planner/assets/tray_icon.png
 !alphaprism/planner/assets/tray_icon.ico
+
+# 本地开发快捷方式(硬编码个人路径,不入库)
+启动行情页.bat
+alphaprism.bat
