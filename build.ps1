@@ -2,7 +2,7 @@
 # 用法(repo 根):
 #   pwsh -File build.ps1              # 出 onedir + 安装器
 #   pwsh -File build.ps1 -SkipInstaller   # 只出 dist\TickerView\
-#   pwsh -File build.ps1 -Python "D:\Anaconda\python.exe"   # 指定装了依赖的解释器
+#   pwsh -File build.ps1 -Python "C:\path\to\python.exe"   # 指定装了依赖的解释器
 param(
     [switch]$SkipInstaller,
     [string]$Python = "python"

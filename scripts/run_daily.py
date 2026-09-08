@@ -1,11 +1,11 @@
-"""每日抓取入口(bat / 计划任务用)。
+"""每日抓取入口(计划任务 / 手动运行)。
 
 运行:
-  D:\\Anaconda\\python.exe scripts\\run_daily.py          # 全量跟踪池
-  D:\\Anaconda\\python.exe scripts\\run_daily.py 510300   # 只抓单只
+  python scripts/run_daily.py          # 全量跟踪池
+  python scripts/run_daily.py 510300   # 只抓单只
 
 日志:控制台 + data/run_daily.log(UTF-8,供计划任务排查)。
-注意:命令 `python` 在本机是 Windows 商店占位符,必须用完整路径。
+注意:若 `python` 在本机是 Windows 商店占位符,请用完整解释器路径。
 """
 from __future__ import annotations
 

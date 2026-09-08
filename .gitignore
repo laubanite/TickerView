@@ -61,3 +61,7 @@ alphaprism/planner/assets/tray_*
 # 本地开发快捷方式(硬编码个人路径,不入库)
 启动行情页.bat
 alphaprism.bat
+bin/alphaprism.bat
+scripts/run_daily.bat
+scripts/run_monitor.bat
+scripts/run_morning.bat

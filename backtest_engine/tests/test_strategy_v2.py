@@ -1,13 +1,15 @@
 # -*- coding: utf-8 -*-
 """strategy_v2 信号引擎单测(门控/单动作/条件组件)。"""
+from pathlib import Path
+
 import pytest
 
 from backtest_engine.core.broker_v2 import BrokerConfig, LayeredBroker
 from backtest_engine.core.strategy_v2 import (StrategyError, _eval_cond,
                                               evaluate_bar, load_layered_strategy)
 
-YAML = r"E:\AgentProjects\AlphaPrism\backtest_engine\configs\strat_alpha_v1.yaml"
-CFG = load_layered_strategy(YAML)
+_YAML = Path(__file__).resolve().parents[1] / "configs" / "strat_alpha_v1.yaml"
+CFG = load_layered_strategy(str(_YAML))
 
 
 def _ctx(close=1.0, open_=1.0, volume=100.0, series=None, state=None, layers=None):
