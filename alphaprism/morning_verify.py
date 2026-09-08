@@ -1,14 +1,13 @@
 """催化判定 N 日验证(方案 M4/M5):纯确定性规则。
 
-判定(important_news 带 impact/confidence)→ N 个交易日后,用板块日线 + 上证指数 + 关键位
+判定(important_news 带 impact/confidence)→ N 个交易日后,用板块日线 + 上证指数
 判 应验/部分应验/未应验/无法判定,写 catalyst_verification。
 聚合 verification_stats 供先验注入(M5)与信息层评估(M6)。
 
-验证规则(方案 3.3.2):
+验证规则(方案 3.3.2,二信号版):
   方向信号   N 日后收盘 vs 判定日收盘(利好期望涨 / 利空期望跌)
   超额信号   板块N日涨幅 − 上证N日涨幅(利好期望 > +1% / 利空 < −1%)
-  关键位     利好期望上穿突破点 / 利空期望下穿减仓红线或生命线
-  应验       方向对 且(关键位成立 或 超额成立)
+  应验       方向对 且 超额成立
   部分应验   方向对但幅度弱 | 未应验 方向错 | 无法判定 中性/无数据/未到期
 """
 from __future__ import annotations
@@ -47,39 +46,6 @@ def _next_nth_close(closes: dict[str, float], base_date: str, n: int) -> tuple[s
     return d, closes[d]
 
 
-def _load_model(cfg: Config):
-    """解析作战地图(取关键位)。失败返回 None(关键位信号降级为无)。"""
-    from .planner.parser import parse_file as parse_battlemap
-
-    path = cfg.get("battlemap", "path", default="")
-    if not path:
-        import glob
-        cands = sorted(glob.glob(r"E:\AITrader\七只ETF作战地图_*.md"), reverse=True)
-        path = cands[0] if cands else ""
-    if not path:
-        return None
-    try:
-        return parse_battlemap(path)
-    except Exception as exc:  # noqa: BLE001
-        logger.warning("作战地图解析失败(关键位信号降级为无): %s", exc)
-        return None
-
-
-def _level_prices(model, symbol: str) -> dict[str, float]:
-    """作战地图关键位:突破点(上)/减仓红线、生命线(下)。"""
-    if model is None:
-        return {}
-    for inst in model.instruments:
-        if inst.code != symbol:
-            continue
-        out: dict[str, float] = {}
-        for l in inst.levels:
-            if l.name in ("突破点", "减仓红线", "生命线"):
-                out.setdefault(l.name, l.price)
-        return out
-    return {}
-
-
 def _bench_closes(conn, cfg: Config, news_rows: list, n_days) -> dict[str, float]:
     """上证指数日线收盘(窗口:最早判定日 −10 天 → 今天)。失败返回空(超额降级)。"""
     if not news_rows:
@@ -97,20 +63,12 @@ def _bench_closes(conn, cfg: Config, news_rows: list, n_days) -> dict[str, float
         return {}
 
 
-def _classify(impact: str, p0: float, pn: float, excess: float | None,
-              level_prices: dict[str, float], win_closes: list[float]) -> tuple[str, str]:
-    """综合 方向/超额/关键位 三信号 → (outcome, evidence)。win_closes:窗口内各交易日收盘。"""
+def _classify(impact: str, p0: float, pn: float, excess: float | None) -> tuple[str, str]:
+    """综合 方向/超额 二信号 → (outcome, evidence)。"""
     if impact == "中性":
         return "无法判定", "中性消息无预期方向"
     up = impact == "利好"
     dir_ok = (pn > p0) if up else (pn < p0)
-    # 关键位信号:利好期望上穿突破点;利空期望下穿减仓红线/生命线
-    key_hit = False
-    if up and level_prices.get("突破点"):
-        key_hit = any(c > level_prices["突破点"] for c in win_closes)
-    elif not up and (level_prices.get("减仓红线") or level_prices.get("生命线")):
-        lvl = level_prices.get("减仓红线") or level_prices["生命线"]
-        key_hit = any(c < lvl for c in win_closes)
     # 超额信号
     if excess is not None:
         exc_ok = (excess > EXCESS_THRESHOLD) if up else (excess < -EXCESS_THRESHOLD)
@@ -118,24 +76,17 @@ def _classify(impact: str, p0: float, pn: float, excess: float | None,
         exc_ok = False
     if not dir_ok:
         return "未应验", f"方向错:判定日 {p0:.3f} → N日 {pn:.3f}"
-    if key_hit or exc_ok:
-        parts = [f"{p0:.3f}→{pn:.3f}"]
-        if key_hit:
-            parts.append("关键位突破")
-        if exc_ok:
-            parts.append(f"超额{excess * 100:+.1f}%")
-        return "应验", "、".join(parts)
+    if exc_ok:
+        return "应验", f"{p0:.3f}→{pn:.3f}、超额{excess * 100:+.1f}%"
     return "部分应验", f"方向对但幅度弱({p0:.3f}→{pn:.3f})"
 
 
-def verify_pending(conn, cfg: Config | None = None, model=None, n_days=N_DAYS) -> dict:
+def verify_pending(conn, cfg: Config | None = None, n_days=N_DAYS) -> dict:
     """对所有到期未验证的 important_news 跑 N 日验证,写 catalyst_verification。
 
     返回 {"verified": 本次新增验证条数, "n_news": 消息总数}。幂等:已验证的跳过。
     """
     cfg = cfg or Config()
-    if model is None:
-        model = _load_model(cfg)
     news_rows = conn.execute(
         "SELECT id, trade_date, sector, symbol, impact, confidence, type "
         "FROM important_news ORDER BY trade_date").fetchall()
@@ -153,19 +104,17 @@ def verify_pending(conn, cfg: Config | None = None, model=None, n_days=N_DAYS) -
         p0 = closes.get(nr["trade_date"])
         if p0 is None:
             continue  # 判定日无K线(大盘/其他板块),无法验证
-        lv = _level_prices(model, nr["symbol"])
         for n in n_days:
             if (nr["id"], n) in done:
                 continue
             end_date, pn = _next_nth_close(closes, nr["trade_date"], n)
             if end_date is None:
                 continue  # 未到期
-            win = [c for d, c in sorted(closes.items()) if nr["trade_date"] < d <= end_date]
             excess = None
             b0, bn = bench.get(nr["trade_date"]), bench.get(end_date)
             if b0 and bn:
                 excess = (pn / p0 - 1) - (bn / b0 - 1)
-            outcome, evidence = _classify(nr["impact"], p0, pn, excess, lv, win)
+            outcome, evidence = _classify(nr["impact"], p0, pn, excess)
             conn.execute(
                 "INSERT OR REPLACE INTO catalyst_verification "
                 "(news_id, n_day, outcome, evidence, excess, verified_at) "

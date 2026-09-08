@@ -58,10 +58,6 @@ intraday:
 # 日报输出目录
 report_dir: "reports"
 
-# 作战地图(里程碑1,§4.1):解析器输入。留空则自动找 AITrader 最新一份。
-battlemap:
-  path: ""
-
 # 推送(阶段5):信号强提醒 + 简报静默。webhook/密钥在 settings.local.yaml(已 gitignore)。
 # 通道:feishu / wecom / serverchan;先填 settings.local.yaml 对应 webhook 再置 enabled=true。
 # 2026-08-24:当前版本停用全部手机推送(盘中快照/盘前简报/监控告警/CLI),更高版本恢复时置 enabled=true。

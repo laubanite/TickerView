@@ -31,7 +31,7 @@ print("status=", r.status_code, "mode=", d.get("mode"), "error=", (d.get("error"
 
 print("== 4. ETF 模式回归(反事实端点不受影响) ==")
 r = client.get("/api/snapshot/tech/counterfactual?code=512480")
-print("ETF 反事实 status=", r.status_code, "(预期 404/502:未找到作战地图或无快照,但不是 400 个股守卫)")
+print("ETF 反事实 status=", r.status_code, "(预期 404/502:标的无快照,但不是 400 个股守卫)")
 r2 = client.get("/api/watchlist")
 types = {i["symbol"]: i.get("type") for i in r2.get_json().get("items", [])}
 print("watchlist types:", types)

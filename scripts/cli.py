@@ -39,9 +39,6 @@ from alphaprism.walkforward import by_year, summarize, walk_forward  # noqa: E40
 
 from alphaprism.pipeline import refresh_sector_crowding  # noqa: E402
 
-from alphaprism.planner.parser import parse_file as parse_battlemap  # noqa: E402
-from alphaprism.backtest_map import run_map_backtest  # noqa: E402
-
 WIND_SKILL_DIR = (
     Path(os.environ.get("USERPROFILE", Path.home())) / ".agents" / "skills" / "wind-mcp-skill"
 )
@@ -481,90 +478,6 @@ def cmd_valuation(_args) -> int:
     return 0
 
 
-def cmd_battlemap(args) -> int:
-    """作战地图 → RuleModel 解析(里程碑1,§4.1)。默认摘要;--json 输出完整模型。"""
-    import json as _json
-
-    path = args.path
-    if not path:
-        # 默认:config 里配的作战地图路径,或 AITrader 目录下最新一份
-        from alphaprism.config import Config as _Cfg
-
-        cfg = _Cfg()
-        path = cfg.get("battlemap", "path", default="")
-        if not path:
-            import glob
-
-            candidates = sorted(glob.glob(r"E:\AITrader\七只ETF作战地图_*.md"), reverse=True)
-            if not candidates:
-                print("未指定作战地图路径,且未找到默认地图。用法: alphaprism battlemap <path>")
-                return 1
-            path = candidates[0]
-    model = parse_battlemap(path)
-    if args.json:
-        print(model.to_json())
-        return 0
-    s = model.summary()
-    print(f"作战地图解析: {path}")
-    print(f"  文档日期 : {s['doc_date'] or '-'} | schema v{s['schema_version']}")
-    print(f"  大盘     : 收盘 {s['market_gate']['close']} | {s['market_gate']['conclusion'][:50]}")
-    print(f"  标的     : {len(s['instruments'])} 只")
-    for i in s["instruments"]:
-        print(f"    {i['code']} {i['name']:<14} 价位{len(i['levels'])} 规则{len(i['rules'])} 预警{len(i['alerts'])}")
-    print(f"  预算分配 : {len(s['budget_items'])} 项: {'、'.join(s['budget_items'])}")
-    print(f"  剧本修正 : {len(s['playbook_rows'])} 行")
-    print(f"  盯盘记录 : {s['journal_entries']} 条")
-    print(f"  待确认   : {s['unresolved']} 条 | 告警 {s['warnings']} 条")
-    if model.unresolved:
-        print("\n  ⚠️ 待人工确认(解析器不猜测):")
-        for u in model.unresolved:
-            print(f"    - {u}")
-    if model.warnings:
-        print("\n  ⚠️ 告警:")
-        for w in model.warnings:
-            print(f"    - {w[:80]}")
-    return 0
-
-
-def cmd_backtest_map(args) -> int:
-    """作战地图回测:按 RuleModel 整套可计算规则跑历史区间(里程碑2,§4.1)。"""
-    path = args.path or _default_battlemap_path()
-    model = parse_battlemap(path)
-    r = run_map_backtest(model, args.start, args.end, args.capital)
-    if "error" in r:
-        print(f"回测失败: {r['error']}")
-        return 1
-    print(f"作战地图回测: {path}")
-    print(f"区间      : {r['period']}  ({r['trading_days']} 交易日)")
-    print(f"参与标的  : {', '.join(r['instruments'])}")
-    print(f"总收益率  : {r['total_return_pct']:+.2f}%   (年化 {r['annualized_pct']:+.2f}%)")
-    print(f"最大回撤  : {r['max_drawdown_pct']:.2f}%")
-    print(f"买入持有  : {r['benchmark_return_pct']:+.2f}%   (等权基准)")
-    print(f"超额 alpha: {r['alpha_pct']:+.2f}%")
-    print(f"交易次数  : {r['trade_count']}")
-    print(f"说明      : {r['note']}")
-    if r["trades"]:
-        print("\n交易明细:")
-        print(f"  {'日期':<11}{'动作':<4}{'价格':>8}{'股数':>7}  触发依据")
-        for t in r["trades"]:
-            print(f"  {t['date']:<11}{t['action']:<4}{t['price']:>8.3f}{t['shares']:>7}  {t['reason']}")
-    return 0
-
-
-def _default_battlemap_path() -> str:
-    """默认作战地图路径:config 配置或 AITrader 最新一份。"""
-    from alphaprism.config import Config as _Cfg
-
-    cfg = _Cfg()
-    path = cfg.get("battlemap", "path", default="")
-    if path:
-        return path
-    import glob
-
-    candidates = sorted(glob.glob(r"E:\AITrader\七只ETF作战地图_*.md"), reverse=True)
-    return candidates[0] if candidates else ""
-
-
 def cmd_panel(_args) -> int:
     """TickerView 托盘宿主:自动拉起 Web 服务 + pywebview 悬浮面板 + 系统托盘常驻。"""
     from alphaprism.planner.floatpanel import run_panel
@@ -578,25 +491,6 @@ def cmd_web(_args) -> int:
     from alphaprism.web.app import main as web_main
 
     web_main()
-    return 0
-
-
-def cmd_close(args) -> int:
-    """盘后生成(里程碑4):收盘对账 + 复盘五问 + 纪律评分 → 追加写入作战地图。"""
-    path = args.path or _default_battlemap_path()
-    if not path:
-        print("未找到作战地图。用法: alphaprism close [path]")
-        return 1
-    model = parse_battlemap(path)
-    from alphaprism.planner.close import append_to_journal, build_close_review
-
-    md = build_close_review(model)
-    print(md)
-    if args.write:
-        append_to_journal(md, path)
-        print(f"\n✅ 已追加写入: {path}")
-    else:
-        print("\n(未写入;加 --write 才写入作战地图)")
     return 0
 
 
@@ -614,59 +508,6 @@ def cmd_counterfactual(args) -> int:
         print()
     return 0
 
-
-def cmd_playbook(args) -> int:
-    """盘前生成(里程碑2):剧本草稿 → 人工确认 → 追加写入作战地图「每日盯盘记录」。"""
-    path = args.path or _default_battlemap_path()
-    if not path:
-        print("未找到作战地图。用法: alphaprism playbook [path]")
-        return 1
-    model = parse_battlemap(path)
-    from alphaprism.planner.playbook import append_to_journal as pb_append
-    from alphaprism.planner.playbook import build_draft, format_draft
-
-    draft = build_draft(model)
-    md = format_draft(draft, model)
-    print(md)
-    if args.write:
-        pb_append(md, path)
-        print(f"\n✅ 已追加写入(盘前草稿): {path}")
-    else:
-        print("\n(草稿未写入;确认无误后加 --write 才写入作战地图)")
-    return 0
-
-
-def cmd_check(args) -> int:
-    """盘中核对(里程碑3):RuleModel × 实时行情 → 每只标的结论词(5档)+ 大盘门控。"""
-    path = args.path or _default_battlemap_path()
-    if not path:
-        print("未找到作战地图。用法: alphaprism check [path]")
-        return 1
-    model = parse_battlemap(path)
-    from alphaprism.planner.live import check_live
-
-    r = check_live(model)
-    g = r["gate"]
-    gate_state = "开放(可加仓)" if g["open"] else "关闭(不加仓)"
-    j = f"{g['j']}" if g["j"] is not None else "-"
-    j_date = g.get("date") or ""
-    print(f"大盘门控: {gate_state}  J={j}(截至 {j_date} 收盘)  规则[{g['rule']}]")
-    print(f"  命中动作: {g['action'] or '-'}")
-    if not g["open"]:
-        print("  ⚠️ 大盘破位/超卖 → 所有'接近买点'降级'等待·缺条件'(§5.1 大盘灯联动)")
-    print()
-    print(f"{'代码':<8}{'名称':<14}{'现价':>8}{'涨跌':>8}{'量能':>5}  结论词")
-    for v in r["verdicts"]:
-        p = f"{v['price']:.3f}" if v["price"] is not None else "-"
-        ch = f"{v['change_pct']:+.2f}%" if v["change_pct"] is not None else "-"
-        near = f"({v['near']})" if v["near"] else ""
-        print(f"{v['code']:<8}{v['name'][:12]:<14}{p:>8}{ch:>8}{v['vol_label']:>5}  "
-              f"{v['conclusion']} {near}")
-    if args.json:
-        import json as _json
-
-        print(_json.dumps(r, ensure_ascii=False, indent=2))
-    return 0
 
 
 # --------------------------------------------------------------------------- 跟踪池管理
@@ -825,43 +666,16 @@ def main() -> int:
     p.add_argument("--detail", action="store_true", help="打印每个窗口明细")
     p.set_defaults(func=cmd_walkforward)
 
-    p = sub.add_parser("battlemap", help="作战地图 → RuleModel 解析(里程碑1)")
-    p.add_argument("path", nargs="?", help="作战地图 .md 路径(默认 config 或 AITrader 最新)")
-    p.add_argument("--json", action="store_true", help="输出完整 RuleModel JSON")
-    p.set_defaults(func=cmd_battlemap)
-
     p = sub.add_parser("web", help="启动 Web 行情页(里程碑6):http://127.0.0.1:8765")
     p.set_defaults(func=cmd_web)
 
     p = sub.add_parser("panel", help="悬浮面板(里程碑7):pywebview 置顶小窗(状态灯+结论词)")
     p.set_defaults(func=cmd_panel)
 
-    p = sub.add_parser("check", help="盘中核对(里程碑3):RuleModel×实时行情→结论词5档+大盘门控")
-    p.add_argument("path", nargs="?", help="作战地图 .md 路径(默认 config 或 AITrader 最新)")
-    p.add_argument("--json", action="store_true", help="输出完整核对 JSON")
-    p.set_defaults(func=cmd_check)
-
-    p = sub.add_parser("close", help="盘后生成(里程碑4):收盘对账+复盘五问+纪律评分")
-    p.add_argument("path", nargs="?", help="作战地图 .md 路径(默认 config 或 AITrader 最新)")
-    p.add_argument("--write", action="store_true", help="追加写入作战地图每日盯盘记录(默认只打印)")
-    p.set_defaults(func=cmd_close)
-
     p = sub.add_parser("counterfactual", help="反事实推演(盘后·情景分支):收盘快照+迁移表→LLM 情景推演")
     p.add_argument("codes", nargs="+", help="标的代码(如 515790)")
     p.add_argument("--scenario", default=None, help="情景描述(如 '大盘明日跌破 3850')")
     p.set_defaults(func=cmd_counterfactual)
-
-    p = sub.add_parser("playbook", help="盘前生成(里程碑2):剧本草稿→确认→追加写入作战地图")
-    p.add_argument("path", nargs="?", help="作战地图 .md 路径(默认 config 或 AITrader 最新)")
-    p.add_argument("--write", action="store_true", help="写入草稿到每日盯盘记录(默认只打印)")
-    p.set_defaults(func=cmd_playbook)
-
-    p = sub.add_parser("backtest-map", help="作战地图回测(里程碑2):按整套可计算规则跑历史区间")
-    p.add_argument("path", nargs="?", help="作战地图 .md 路径(默认 config 或 AITrader 最新)")
-    p.add_argument("--start", default="2025-08-01", help="开仓时点(默认 2025-08-01)")
-    p.add_argument("--end", default="2026-08-01", help="回测区间终点(默认 2026-08-01)")
-    p.add_argument("--capital", type=float, default=17300, help="初始本金(默认 17300)")
-    p.set_defaults(func=cmd_backtest_map)
 
     p = sub.add_parser("wind", help="调用 Wind MCP 取数")
     p.add_argument("server", help="server_type,如 stock_data / fund_data / index_data / economic_data")
