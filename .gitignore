@@ -58,10 +58,10 @@ alphaprism/planner/assets/tray_*
 !alphaprism/planner/assets/tray_icon.png
 !alphaprism/planner/assets/tray_icon.ico
 
-# ±¾µØ¿ª·¢¿ì½İ·½Ê½(Ó²±àÂë¸öÈËÂ·¾¶,²»Èë¿â)
-Æô¶¯ĞĞÇéÒ³.bat
+# æœ¬æœºå¿«æ·å¯åŠ¨å™¨(ç¡¬ç¼–ç æœ¬æœºè·¯å¾„,ä¸å…¥åº“)
 alphaprism.bat
 bin/alphaprism.bat
 scripts/run_daily.bat
 scripts/run_monitor.bat
 scripts/run_morning.bat
+å¯åŠ¨è¡Œæƒ…é¡µ.bat

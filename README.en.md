@@ -2,8 +2,8 @@
 
 [简体中文](README.md) · **English**
 
-> An **AI-assisted market monitor and decision-support system** for China A-share investors.
-> In one line: **the rule engine computes precisely, the LLM explains clearly, you decide** — no price prediction, no auto-trading.
+> An **AI-assisted market monitor and decision-support system** for A-share investors.
+> An engine that computes precisely, an AI that explains clearly — and **you always make the call**. No auto-trading.
 
 <p>
   <img alt="platform" src="https://img.shields.io/badge/platform-Windows-lightgrey">
@@ -14,89 +14,78 @@
 
 ---
 
+## At a glance
+
+**Desktop floating panel** — a borderless, always-on-top mini window in the system tray; live quotes at a glance without interrupting whatever you're doing:
+
+<img src="showcase/悬浮面板.png" alt="Desktop floating panel" width="620">
+
+**Web dashboard** — pre-market · intraday · post-market in one browser page:
+
+| Pre-market · News & state light | Intraday · ETF/stock deep analysis | Post-market · Verification calendar |
+|---|---|---|
+| <img src="showcase/盘前.jpeg" alt="Pre-market: AI news filtering and market-state light" width="280"> | <img src="showcase/盘中-ETF.jpeg" alt="Intraday: snapshot, signal and AI analysis (ETF/stock)" width="280"> | <img src="showcase/盘后.jpeg" alt="Post-market: advice verification calendar" width="280"> |
+
 ## Why this exists
 
-Retail investors face concrete pain: trading apps are noisy, decisions run on gut feel, and reviews are forgotten in three days. Meanwhile most "AI stock pickers" are either black boxes or let the model invent prices — **untrustworthy, and unusable in a financial context**.
+Retail monitoring pain is concrete:
 
-TickerView's approach is to **draw a hard boundary around the AI**: every number and signal is computed by reproducible rules; the LLM only translates the result into plain language. The tool promises no alpha — it offers **information aggregation, discipline enforcement, and verifiability**.
+- **Information overload**: a dozen symbols on the watchlist, endless news flashes, and the items that matter drown in noise;
+- **Nobody checks the receipts**: "AI stock pickers" produce opinions daily but never look back at whether they were right — you can't tell skill from luck;
+- **AI tools you can't trust**: black-box judgments can't be verified, and models will invent prices with a straight face.
 
-## Product forms
+TickerView's answer: **make the ledger visible**. Information aggregated for you, discipline nudged for you — and **every directional judgment is automatically reconciled days later, with the scorecard sitting right on the calendar**. You don't have to trust me; read the ledger.
 
-| Form | What it is |
-|---|---|
-| 🖥️ **Desktop floating panel** | Borderless, always-on-top, tray-resident mini window for at-a-glance live quotes (`TickerView.exe`) |
-| 🌐 **Web dashboard** | Indices / watchlist / K-line / intraday + pre-market · intraday · post-market panels, opened in a local browser |
-| ⚙️ **Backend engine (source)** | Data pipeline, rule-signal engine, and a backtesting engine validated trade-by-trade (for research; not part of the desktop UI) |
+## What it does for you each day
 
-<!-- 📸 Screenshots: drop images into docs/screenshots/ then uncomment -->
-<!-- ![Desktop floating panel](docs/screenshots/panel.png) -->
-<!-- ![Web dashboard](docs/screenshots/web.png) -->
+### Pre-market · "Is anything happening today?" in one minute
 
-## Key features
+Open it in the morning: a hundred-plus market flashes have been filtered by AI into **5–8 items that actually matter**, each tagged bullish/bearish, related sector and confidence. The state light 🟢🟡🔴 at the top tells you whether today is a day to act or to sit — a red light only nudges "hold off, don't open new positions"; **it never touches your stop-losses and never decides anything for you**.
 
-**Real-time monitoring**
-- Shanghai / Shenzhen / ChiNext index snapshots + live watchlist quotes (price / change / turnover / volume ratio)
-- Daily / 30-min candlesticks with moving averages and **key-level overlays**; intraday chart (with VWAP line), volume sub-chart
-- Holdings highlighting; A-share convention **red = up, green = down** (semantic colors fixed)
-- Tray-resident floating panel, same data source as the web view
+### Intraday · Understand a symbol at a glance
 
-**Pre-market · Market-state light**
-- Answers one thing: **is there an event today that says don't move the strategy**. It doesn't decide for you and makes no technical judgment
-- Fully deterministic grading: source tiering → keyword hits (polarity × severity + negation exclusion) → 🟢 normal / 🟡 cautious / 🔴 alert
-- Bullish news never offsets bearish; the day only escalates, never de-escalates. Red/yellow **only nudges you to "hold off, don't open new positions" — it never touches your stop-losses or auto-tunes parameters**
+Hit "refresh snapshot" on an ETF or stock in your watchlist: the engine computes MA relationships, volume ratio and key levels, and a **one-line signal** tells you its state and the corresponding action tier.
 
-**Intraday · Snapshot & signals (ETF / stock dual mode)**
-- **ETF mode**: deterministic snapshot + one-line signal + LLM deep analysis + post-close counterfactual reasoning
-- **Stock mode**: risk-monitoring snapshot + a state machine (breakdown / cost / deep drawdown / limit-up-down & suspension…), **risk flags only — no buy/sell advice**
+Want the full read? "Deep analysis" hands over to the AI — **writing its interpretation from the numbers the engine just computed**: every price traceable, nothing invented; if the model misbehaves, layered validation bounces it. **What you read is either accurate or absent — never "plausible-sounding nonsense"**. ETFs also support **counterfactual reasoning**: "what happens if it breaks X?" — answered by rule-based extrapolation, not model imagination.
 
-**Post-market · Advice-verification calendar**
-- Each intraday snapshot auto-archives the day's advice; every directional advice is **auto-judged "verified / not verified" after 3 / 5 trading days**, forming an objective effectiveness ledger (fully local, zero push)
+Stocks take a deliberately different route: **risk flags only, never buy/sell advice** — escalating tiers nudge you to trim and stay alert, but the tool will never tell you "it's time to buy". That call stays yours.
 
-**Settings**
-- Models (multi-LLM config + connectivity test) · Holdings (position cards + account cash floor) · General (refresh interval / tray preferences)
+### Post-market · Every piece of advice gets a scorecard
 
-## 🧠 What the AI actually does here
+This is where TickerView differs from every "AI stock picker": **each directional advice given intraday is auto-judged "verified / partially verified / not verified" after 3 / 5 trading days**.
 
-**The AI does exactly one thing: translate the facts the engine already computed into plain language. It doesn't compute, and it doesn't decide.**
+Open the verification calendar and the last 90 days of advice are laid out — whether this tool has been any good lately isn't something I tell you; it's right there in the ledger. Fully local, zero push notifications.
 
-A real intraday flow, so you can see it immediately:
+## 🧠 Why the AI content here is trustworthy
 
-1. You click "**Refresh snapshot**" → the engine reads the live price + daily bars, computes moving averages, volume ratio and key-level relationships, and emits a **deterministic signal**, e.g. "close below MA20, volume ratio 1.8 → breakdown · trim tier". **No AI in this step — it's all rules.**
-2. You click "**Deep analysis**" → those **already-computed numbers** are handed to the LLM, which writes a plain-language read: "the symbol closed below its 20-day MA on rising volume; per your rules this is a trim tier; the 250-day line still offers support below…"
-3. The model **may only cite numbers the engine provided**. If it invents a price the engine never gave, or contradicts itself directionally, **the validation chain bounces it**; on a second failure it falls back to showing only the deterministic card — **say less rather than say wrong**.
+Three design choices make every AI output defensible:
 
-Pre-market works the same: if this morning an S-tier bearish item (e.g. "CSRC filing") is caught, the **rules** set the light to 🔴 directly; the AI only tags each news item bullish/bearish/neutral in the evidence list below — **it does not participate in grading**.
+1. **The AI translates; it doesn't compute** — every number comes from a reproducible engine, and the AI's job is to turn facts into plain language. It produces no prices, does no grading, makes no decisions.
+2. **Every number has a source** — prices in AI output must trace back to the engine snapshot; anything else is treated as fabrication and bounced. Directional words and state words are whitelist-locked. **Say less rather than say wrong**.
+3. **If the model dies, the app doesn't** — multi-model automatic failover; if everything fails, it degrades to keyword filtering, then to the raw feed (clearly labeled "not AI-filtered"). **No single point of failure interrupts the product or fabricates content.**
 
-So the division of labor is crystal clear:
+In one line: **the AI's boundary is crystal clear — it saves you time, and you keep full authority over your own judgment**.
 
-| Who | Does what | Traits |
-|---|---|---|
-| **Rule engine** | Computes price relationships, signals, pre-market grading, post-market verification | Reproducible, auditable, no LLM involved |
-| **LLM** | Turns facts into fluent interpretation, tags news | Produces no numbers, makes no judgment, degrades on error |
-| **You** | Read the hints, decide, place orders | The tool never trades for you |
+## Real-time monitoring (the basics)
+
+- SSE / SZSE / ChiNext index snapshots + live watchlist quotes (price / change / turnover / volume ratio)
+- Daily / 30-min candlesticks with MAs; intraday chart (with average-price line), volume sub-chart
+- Holdings highlighting; A-share convention **red = up, green = down**
+- Floating panel / web dashboard / tray — all data from the same source
 
 ## Data sources
 
 All from public data sources; the tool **connects to no trading account and places no orders**:
 
-- **Real-time quotes / indices / intraday**: Tencent market data, Tonghuashun (10jqka) on-floor snapshots
-- **Daily / 30-min K-line**: Tencent market API (supplemented by akshare)
-- **Overnight news**: Sina Finance 7×24 feed
-- **Sector moves / hot lists**: Tonghuashun (10jqka)
-- **Backtest indicator computation**: TA-Lib
-
-## Tech stack
-
-- **Backend**: Python · Flask · SQLite · akshare · multi-source direct fetch with fallback · TA-Lib
-- **Frontend**: Vue 3 · ECharts (local vendor, no CDN dependency)
-- **Desktop**: pywebview (Edge WebView2) · pystray (system tray) · Pillow (icons)
-- **Packaging**: PyInstaller (onedir) · Inno Setup (per-user, no-admin install)
-- **AI**: automatic failover across multiple free LLMs (keys stored locally only, never uploaded)
+- Real-time quotes / indices / intraday: Tencent market data, Tonghuashun (10jqka) snapshots
+- Daily / 30-min K-line: Tencent market API (supplemented by akshare)
+- News flashes: Sina Finance 7×24, EastMoney
+- Sector moves / hot lists: Tonghuashun (10jqka)
 
 ## 📦 Install (end users)
 
 1. Go to **[Releases](../../releases)** and download `TickerView-Setup-0.1.0.exe`
-2. Double-click to install — **per-user, no administrator rights required**; defaults to `%LOCALAPPDATA%\Programs\TickerView` (you can change it, e.g. to D:)
+2. Double-click to install — **per-user, no administrator rights required**; defaults to `%LOCALAPPDATA%\Programs\TickerView` (changeable, e.g. to D:)
 3. A "TickerView" entry appears in the Start menu / desktop; the app lives in the **system tray**
 
 **Requirements**: Windows 10 / 11 (64-bit). Win11 ships WebView2; most Win10 machines already have it via Edge, and the installer also bootstraps it.
@@ -105,38 +94,35 @@ All from public data sources; the tool **connects to no trading account and plac
 <summary>SmartScreen prompt on first run?</summary>
 
 This project is not code-signed (paid certificate), so the first run may show "Windows protected your PC / unknown publisher". Click **More info → Run anyway**.
+
 </details>
 
-**Portable**: planned (please use the installer for now).
+**Where your data lives**: config and database are stored under `%APPDATA%\TickerView\`. **Uninstalling keeps your data**; reinstalling picks it right up. A fresh install starts with an empty watchlist — add your own symbols.
 
-**Where your data lives**: config and database are stored under `%APPDATA%\TickerView\` (`config\` + `data\alphaprism.db`). **Uninstalling keeps your data**; reinstalling picks it right up. A fresh install starts with an empty watchlist — add your own symbols.
+> The desktop app provides **real-time monitoring and signals out of the box**; pre-market news filtering and intraday AI deep analysis need LLM keys configured in Settings (free-tier models supported, multi-provider failover built in).
 
-> The desktop app provides **real-time monitoring and deterministic signals out of the box**; pre-market news grading and intraday LLM deep analysis require network data and LLM keys configured in Settings.
-
-## 🔨 Run from source (developers / full engine)
+## 🔨 Run from source (developers)
 
 ```bash
-# 1) Install dependencies (Python 3.11+ recommended)
-pip install -r requirements.txt
+pip install -r requirements.txt        # Python 3.11+
 
-# 2) Desktop floating panel (auto-starts the local server + tray-resident)
-python scripts/cli.py panel
-
-# Or the pure web dashboard (open http://127.0.0.1:8765 in a browser)
-python scripts/cli.py web
+python scripts/cli.py panel            # Desktop floating panel (auto-starts local server + tray)
+python scripts/cli.py web              # Or the pure web dashboard (http://127.0.0.1:8765)
 ```
 
-Data fetching, signals and the backtesting engine live in `scripts/cli.py` subcommands (e.g. `daily` / `signal`). LLM features need keys in `config/settings.local.yaml` (gitignored).
+Data fetching, signals and the backtesting engine live in `scripts/cli.py` subcommands (`daily` / `signal`, etc.). LLM keys go in `config/settings.local.yaml` (gitignored). The backtesting engine is calibrated trade-by-trade against JoinQuant (< 1% P&L error) for researchers who want to reproduce conclusions.
+
+**Tech stack**: Python · Flask · SQLite · Vue 3 · ECharts · pywebview · PyInstaller + Inno Setup · automatic failover across free LLMs (akshare / TA-Lib for data and indicators)
 
 ## 🔒 Data & privacy
 
-- Fully local — **no account, no telemetry, nothing uploaded**; quotes come from public data sources.
-- Model keys, watchlist and database stay on your own machine.
+- Fully local — **no account, no telemetry, nothing uploaded**
+- Model keys, watchlist and database stay on your own machine
 
 ## ⚠️ Disclaimer
 
-- This is a **research / personal tool** and does not constitute investment advice; market data may be delayed or inaccurate — rely on official disclosures.
-- **No auto-trading** — you execute every trade and bear the risk. Markets carry risk; decide carefully.
+- This is a **research / personal tool** and does not constitute investment advice; market data may be delayed or inaccurate — rely on official disclosures
+- **No auto-trading** — you execute every trade and bear the risk. Markets carry risk; decide carefully
 
 ## License
 
