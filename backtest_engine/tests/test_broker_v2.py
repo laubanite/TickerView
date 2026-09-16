@@ -72,3 +72,18 @@ def test_hygiene_raises_on_negative_cash():
     b.cash = -1.0
     with pytest.raises(AssertionError):
         b._assert_health()
+
+
+def test_full_cash_buy_reserves_commission():
+    """满配贴现金边缘:现金限价必须含佣金(nl2strat P0 单层满配暴露的边界)。
+
+    旧口径 target=min(...,cash) 后按 fill 定股数,amount+fee 可微超 cash →
+    现金转负、卫生断言崩。新口径按 cash/(1+fee_rate) 限价。既有 1/3 配仓策略
+    target≪cash,行为不变(上面各用例即回归位)。
+    """
+    b = LayeredBroker(BrokerConfig(initial_cash=100.0, commission_rate=0.0005,
+                                   slippage_rate=0.0, full_allocation=1.0))
+    b.caps = {}                       # 无组上限 → 仅现金/满配约束
+    b.buy_layer("d1", 0.01, "main", 100.0, "full_buy")
+    assert b.cash >= 0, f"现金转负: {b.cash}"
+    assert b.layers.main > 0          # 仍应成交(少一手不伤语义)

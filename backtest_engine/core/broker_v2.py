@@ -139,7 +139,11 @@ class LayeredBroker:
             if invested_grp >= cap_amount - 1e-6:
                 return None                       # 已达共享上限
             target = min(target, cap_amount - invested_grp)
-        target = min(target, self.cash, self.remaining())
+        # 现金上限含佣金(2026-09 nl2strat P0 暴露:单层满配买入时 target 贴到 cash,
+        # 原口径 amount+fee 可越界致现金转负、触发卫生断言;限价改走"金额+费"同
+        # 512890 组上限硬夹一个口径。既有产品策略 target≪cash,行为零变化。)
+        fee_rate = self.cfg.commission_rate
+        target = min(target, self.cash / (1 + fee_rate), self.remaining())
         fill = self._fill(price, "BUY")
         # 1e-9 容忍浮点边缘(如 3%×满配=99.9999 元,floor 归零)
         shares = int(math.floor((target + 1e-9) / fill / self.cfg.lot_size)) * self.cfg.lot_size
