@@ -65,3 +65,5 @@ scripts/run_daily.bat
 scripts/run_monitor.bat
 scripts/run_morning.bat
 启动行情页.bat
+
+.vscode/
