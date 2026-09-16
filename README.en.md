@@ -110,9 +110,27 @@ python scripts/cli.py panel            # Desktop floating panel (auto-starts loc
 python scripts/cli.py web              # Or the pure web dashboard (http://127.0.0.1:8765)
 ```
 
-Data fetching, signals and the backtesting engine live in `scripts/cli.py` subcommands (`daily` / `signal`, etc.). LLM keys go in `config/settings.local.yaml` (gitignored). The backtesting engine is calibrated trade-by-trade against JoinQuant (< 1% P&L error) for researchers who want to reproduce conclusions.
+Data fetching, signals and the backtesting engine live in `scripts/cli.py` subcommands (`daily` / `signal`, etc.). LLM keys go in `config/settings.local.yaml` (gitignored). The backtesting engine is calibrated trade-by-trade against JoinQuant (< 1% P&L error) for researchers who want to reproduce conclusions. For drafting strategies from natural language, see NL2Strat below.
 
 **Tech stack**: Python · Flask · SQLite · Vue 3 · ECharts · pywebview · PyInstaller + Inno Setup · automatic failover across free LLMs (akshare / TA-Lib for data and indicators)
+
+## 💬 Backtest from a sentence · NL2Strat (research layer)
+
+Many tools let AI "generate a strategy" by inventing one for you; this one goes the other way — it is **a draftsman that speaks your language and is not afraid to reject the draft**, holding the same line as the rest of the product: **the AI only translates, rules must land in vocabulary the backtest engine can actually run, and anything untranslatable is refused, never faked**.
+
+```bash
+python -m alphaprism.nl2strat.cli "159516,2023-01-01到2024-12-31,收盘突破20日高点全仓买入,跌破成本8%止损清仓"
+```
+
+Three exits = three honest postures (there is no fourth that "pretends to be done"):
+
+- ✅ **READY** — every user fragment reconciled, **a real engine backtest run (commissions & slippage included)**; you get the YAML plus a report mapping "your words → the rule as built", checkable line by line;
+- ❓ **NEEDS_ASK** — when key info is missing or ambiguous it **asks you back** instead of inventing defaults; the session resumes where you left off;
+- 🚫 **UNSUPPORTED** — semantics the engine vocabulary can't express (e.g. stock picking by ROE) are **explicitly refused, nearest alternative offered** — never a silent look-alike rule.
+
+The guardrails live in code: every model-written change passes **deterministic gates + an authorization set** (out-of-scope rejections, zero side effects), the repair loop has a **hard budget cap** (no infinite spinning that burns your API quota), plus a semantic-faithfulness gate aimed at the sneakiest failure — a stop-loss translated into a take-profit. Every step is traced to disk and replayable.
+
+> Exit codes `0 / 2 / 3 / 4`: READY / UNSUPPORTED / NEEDS_ASK / failed or budget exhausted. On free-tier models one strategy typically ships in 4–6 LLM calls.
 
 ## 🔒 Data & privacy
 
